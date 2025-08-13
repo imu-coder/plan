@@ -1,53 +1,78 @@
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { Bell, Calendar, Eye, Building2, CheckCircle, XCircle, AlertCircle, Loader, RefreshCw, BarChart3, PieChart, DollarSign, LayoutGrid, TrendingUp, Users, FileText } from 'lucide-react';
+import { 
+  BarChart3, PieChart, TrendingUp, Users, Building2, Target, Activity, 
+  DollarSign, CheckCircle, XCircle, Clock, AlertCircle, Loader, RefreshCw, 
+  Eye, Calendar, FileText, Download, Settings, Filter, Search, ArrowUp, ArrowDown
+} from 'lucide-react';
 import { useLanguage } from '../lib/i18n/LanguageContext';
 import { plans, organizations, auth, api } from '../lib/api';
 import { format } from 'date-fns';
-import PlanReviewForm from '../components/PlanReviewForm';
-import { isAdmin, isEvaluator } from '../types/user';
-import Cookies from 'js-cookie';
+import { isAdmin } from '../types/user';
 import { Bar, Doughnut, Line } from 'react-chartjs-2';
-import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement, Title, PointElement, LineElement } from 'chart.js';
+import { 
+  Chart as ChartJS, 
+  ArcElement, 
+  Tooltip, 
+  Legend, 
+  CategoryScale, 
+  LinearScale, 
+  BarElement, 
+  Title,
+  PointElement,
+  LineElement,
+  Filler
+} from 'chart.js';
 
 // Register Chart.js components
-ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement, Title, PointElement, LineElement);
+ChartJS.register(
+  ArcElement, 
+  Tooltip, 
+  Legend, 
+  CategoryScale, 
+  LinearScale, 
+  BarElement, 
+  Title,
+  PointElement,
+  LineElement,
+  Filler
+);
 
-// Set some chart defaults
-ChartJS.defaults.color = '#4b5563';
-ChartJS.defaults.font.family = 'Inter, sans-serif';
+// Chart configuration
+const chartOptions = {
+  responsive: true,
+  maintainAspectRatio: false,
+  plugins: {
+    legend: {
+      position: 'bottom' as const,
+    },
+  },
+};
 
 const AdminDashboard: React.FC = () => {
   const { t } = useLanguage();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  
+  // State management
+  const [activeTab, setActiveTab] = useState<'overview' | 'pending' | 'reviewed' | 'analytics' | 'organizations' | 'users'>('overview');
   const [selectedPlan, setSelectedPlan] = useState<any>(null);
   const [showReviewModal, setShowReviewModal] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [organizationsMap, setOrganizationsMap] = useState<Record<string, string>>({});
-  const [activeTab, setActiveTab] = useState<'overview' | 'pending' | 'reviewed' | 'analytics'>('overview');
-  const [budgetData, setBudgetData] = useState<any>({
-    labels: [],
-    datasets: []
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [sortBy, setSortBy] = useState<'date' | 'organization' | 'status'>('date');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [dateRange, setDateRange] = useState<{ from: string; to: string }>({
+    from: '',
+    to: ''
   });
-  const [planStatusData, setPlanStatusData] = useState<any>({
-    labels: [],
-    datasets: []
-  });
-  const [orgSubmissionData, setOrgSubmissionData] = useState<any>({
-    labels: [],
-    datasets: []
-  });
-  const [budgetTrendsData, setBudgetTrendsData] = useState<any>({
-    labels: [],
-    datasets: []
-  });
-  const [userOrgIds, setUserOrgIds] = useState<number[]>([]);
 
-  // Check if user has admin permissions
+  // Check admin permissions
   useEffect(() => {
     const checkPermissions = async () => {
       try {
@@ -57,15 +82,9 @@ const AdminDashboard: React.FC = () => {
           return;
         }
         
-        // Get user's organization IDs for filtering (admins can see all)
-        if (authData.userOrganizations && authData.userOrganizations.length > 0) {
-          const orgIds = authData.userOrganizations.map(org => org.organization);
-          setUserOrgIds(orgIds);
-          console.log('Admin organization IDs:', orgIds);
-        }
-        
         if (!isAdmin(authData.userOrganizations)) {
           setError('You do not have permission to access the admin dashboard');
+          setTimeout(() => navigate('/dashboard'), 3000);
         }
       } catch (error) {
         console.error('Failed to check permissions:', error);
@@ -76,7 +95,7 @@ const AdminDashboard: React.FC = () => {
     checkPermissions();
   }, [navigate]);
 
-  // Fetch all organizations to map IDs to names
+  // Fetch organizations for mapping
   useEffect(() => {
     const fetchOrganizations = async () => {
       try {
@@ -92,7 +111,6 @@ const AdminDashboard: React.FC = () => {
         }
         
         setOrganizationsMap(orgMap);
-        console.log('Organizations map created:', orgMap);
       } catch (error) {
         console.error('Failed to fetch organizations:', error);
       }
@@ -101,33 +119,13 @@ const AdminDashboard: React.FC = () => {
     fetchOrganizations();
   }, []);
 
-  // Fetch all plans for admin analytics
-  const { data: allPlans, isLoading, refetch } = useQuery({
+  // Fetch all plans
+  const { data: allPlans, isLoading: isLoadingPlans, refetch: refetchPlans } = useQuery({
     queryKey: ['plans', 'admin-all'],
     queryFn: async () => {
-      console.log('Fetching all plans for admin dashboard');
       try {
-        await auth.getCurrentUser();
-        
-        // Get ALL plans for admin view
-        const response = await api.get('/plans/');
-        
-        console.log('All plans response for admin:', response.data?.length || 0);
-        
-        const plans = response.data?.results || response.data || [];
-        
-        console.log(`Admin dashboard loaded ${plans.length} total plans`);
-        
-        // Map organization names
-        if (Array.isArray(plans)) {
-          plans.forEach((plan: any) => {
-            if (plan.organization && organizationsMap[plan.organization]) {
-              plan.organizationName = organizationsMap[plan.organization];
-            }
-          });
-        }
-        
-        return { data: plans };
+        const response = await plans.getAll();
+        return response?.data || [];
       } catch (error) {
         console.error('Error fetching all plans:', error);
         throw error;
@@ -135,307 +133,377 @@ const AdminDashboard: React.FC = () => {
     },
     retry: 2,
     refetchInterval: 60000, // Refresh every minute
-    refetchOnWindowFocus: true
   });
 
-  // Fetch pending plans for review
-  const { data: pendingPlans } = useQuery({
-    queryKey: ['plans', 'admin-pending'],
+  // Fetch all organizations
+  const { data: allOrganizations, isLoading: isLoadingOrgs } = useQuery({
+    queryKey: ['organizations', 'admin-all'],
     queryFn: async () => {
       try {
-        await auth.getCurrentUser();
-        
-        const response = await api.get('/plans/', {
-          params: {
-            status: 'SUBMITTED'
-          }
-        });
-        
-        const plans = response.data?.results || response.data || [];
-        
-        // Map organization names
-        if (Array.isArray(plans)) {
-          plans.forEach((plan: any) => {
-            if (plan.organization && organizationsMap[plan.organization]) {
-              plan.organizationName = organizationsMap[plan.organization];
-            }
-          });
-        }
-        
-        return { data: plans };
+        const response = await organizations.getAll();
+        return response || [];
       } catch (error) {
-        console.error('Error fetching pending plans:', error);
+        console.error('Error fetching organizations:', error);
         throw error;
       }
     },
-    enabled: !!organizationsMap && Object.keys(organizationsMap).length > 0,
-    retry: 2
+    retry: 2,
   });
 
-  // Fetch reviewed plans
-  const { data: reviewedPlans } = useQuery({
-    queryKey: ['plans', 'admin-reviewed'],
-    queryFn: async () => {
-      try {
-        await auth.getCurrentUser();
-        
-        const response = await api.get('/plans/', {
-          params: {
-            status__in: 'APPROVED,REJECTED'
-          }
-        });
-        
-        const plans = response.data?.results || response.data || [];
-        
-        // Map organization names
-        if (Array.isArray(plans)) {
-          plans.forEach((plan: any) => {
-            if (plan.organization && organizationsMap[plan.organization]) {
-              plan.organizationName = organizationsMap[plan.organization];
-            }
-          });
-        }
-        
-        return { data: plans };
-      } catch (error) {
-        console.error('Error fetching reviewed plans:', error);
-        throw error;
-      }
-    },
-    enabled: !!organizationsMap && Object.keys(organizationsMap).length > 0,
-    retry: 2
-  });
-
-  // Calculate budget totals from SubActivity model
-  const calculateBudgetTotals = (plans: any[]) => {
-    let totalBudget = 0;
-    let totalGovernment = 0;
-    let totalPartners = 0;
-    let totalSDG = 0;
-    let totalOther = 0;
-    let totalAvailable = 0;
-    let totalGap = 0;
-
-    if (!plans || !Array.isArray(plans)) {
+  // Calculate comprehensive statistics
+  const calculateStats = () => {
+    if (!allPlans || !Array.isArray(allPlans)) {
       return {
+        totalPlans: 0,
+        pendingPlans: 0,
+        approvedPlans: 0,
+        rejectedPlans: 0,
+        draftPlans: 0,
         totalBudget: 0,
-        totalGovernment: 0,
-        totalPartners: 0,
-        totalSDG: 0,
-        totalOther: 0,
-        totalAvailable: 0,
-        totalGap: 0
+        totalFunding: 0,
+        fundingGap: 0,
+        organizationsWithPlans: 0,
+        avgPlanValue: 0,
+        recentSubmissions: 0
       };
     }
 
-    plans.forEach((plan: any) => {
-      if (!plan.objectives) return;
+    const stats = {
+      totalPlans: allPlans.length,
+      pendingPlans: allPlans.filter(p => p.status === 'SUBMITTED').length,
+      approvedPlans: allPlans.filter(p => p.status === 'APPROVED').length,
+      rejectedPlans: allPlans.filter(p => p.status === 'REJECTED').length,
+      draftPlans: allPlans.filter(p => p.status === 'DRAFT').length,
+      totalBudget: 0,
+      totalFunding: 0,
+      fundingGap: 0,
+      organizationsWithPlans: new Set(allPlans.map(p => p.organization)).size,
+      avgPlanValue: 0,
+      recentSubmissions: 0
+    };
 
-      plan.objectives.forEach((objective: any) => {
-        if (!objective.initiatives) return;
+    // Calculate budget totals using SubActivity model
+    const budgetTotals = calculateBudgetTotals(allPlans);
+    stats.totalBudget = budgetTotals.total;
+    stats.totalFunding = budgetTotals.totalFunding;
+    stats.fundingGap = budgetTotals.fundingGap;
+    stats.avgPlanValue = stats.totalPlans > 0 ? stats.totalBudget / stats.totalPlans : 0;
 
-        objective.initiatives.forEach((initiative: any) => {
-          if (!initiative.main_activities) return;
+    // Recent submissions (last 7 days)
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    stats.recentSubmissions = allPlans.filter(p => 
+      p.submitted_at && new Date(p.submitted_at) > sevenDaysAgo
+    ).length;
 
-          initiative.main_activities.forEach((activity: any) => {
-            // Calculate budget from sub-activities (new model)
-            if (activity.sub_activities && activity.sub_activities.length > 0) {
-              activity.sub_activities.forEach((subActivity: any) => {
-                const subBudgetRequired = subActivity.budget_calculation_type === 'WITH_TOOL'
-                  ? Number(subActivity.estimated_cost_with_tool || 0)
-                  : Number(subActivity.estimated_cost_without_tool || 0);
+    return stats;
+  };
+
+  // Calculate budget totals using SubActivity model
+  const calculateBudgetTotals = (plans: any[]) => {
+    let total = 0;
+    let totalFunding = 0;
+    let governmentTotal = 0;
+    let partnersTotal = 0;
+    let sdgTotal = 0;
+    let otherTotal = 0;
+
+    if (!plans || !Array.isArray(plans)) {
+      return { total, totalFunding, fundingGap: 0, governmentTotal, partnersTotal, sdgTotal, otherTotal };
+    }
+
+    try {
+      plans.forEach((plan) => {
+        if (!plan.objectives || !Array.isArray(plan.objectives)) return;
+
+        plan.objectives.forEach((objective: any) => {
+          if (!objective.initiatives || !Array.isArray(objective.initiatives)) return;
+
+          objective.initiatives.forEach((initiative: any) => {
+            if (!initiative.main_activities || !Array.isArray(initiative.main_activities)) return;
+
+            initiative.main_activities.forEach((activity: any) => {
+              // Calculate budget from sub-activities (new model)
+              if (activity.sub_activities && Array.isArray(activity.sub_activities) && activity.sub_activities.length > 0) {
+                activity.sub_activities.forEach((subActivity: any) => {
+                  const subCost = subActivity.budget_calculation_type === 'WITH_TOOL'
+                    ? Number(subActivity.estimated_cost_with_tool || 0)
+                    : Number(subActivity.estimated_cost_without_tool || 0);
+                  
+                  const subGov = Number(subActivity.government_treasury || 0);
+                  const subPartners = Number(subActivity.partners_funding || 0);
+                  const subSdg = Number(subActivity.sdg_funding || 0);
+                  const subOther = Number(subActivity.other_funding || 0);
+                  
+                  total += subCost;
+                  governmentTotal += subGov;
+                  partnersTotal += subPartners;
+                  sdgTotal += subSdg;
+                  otherTotal += subOther;
+                  totalFunding += (subGov + subPartners + subSdg + subOther);
+                });
+              } else if (activity.budget) {
+                // Fallback to legacy budget if no sub-activities
+                const cost = activity.budget.budget_calculation_type === 'WITH_TOOL'
+                  ? Number(activity.budget.estimated_cost_with_tool || 0)
+                  : Number(activity.budget.estimated_cost_without_tool || 0);
                 
-                const subGovernment = Number(subActivity.government_treasury || 0);
-                const subPartners = Number(subActivity.partners_funding || 0);
-                const subSDG = Number(subActivity.sdg_funding || 0);
-                const subOther = Number(subActivity.other_funding || 0);
-                const subTotalAvailable = subGovernment + subPartners + subSDG + subOther;
-                const subGap = Math.max(0, subBudgetRequired - subTotalAvailable);
-
-                totalBudget += subBudgetRequired;
-                totalGovernment += subGovernment;
-                totalPartners += subPartners;
-                totalSDG += subSDG;
-                totalOther += subOther;
-                totalAvailable += subTotalAvailable;
-                totalGap += subGap;
-              });
-            } else if (activity.budget) {
-              // Fallback to legacy budget if no sub-activities
-              const budgetRequired = activity.budget.budget_calculation_type === 'WITH_TOOL'
-                ? Number(activity.budget.estimated_cost_with_tool || 0)
-                : Number(activity.budget.estimated_cost_without_tool || 0);
-              
-              const government = Number(activity.budget.government_treasury || 0);
-              const partners = Number(activity.budget.partners_funding || 0);
-              const sdg = Number(activity.budget.sdg_funding || 0);
-              const other = Number(activity.budget.other_funding || 0);
-              const available = government + partners + sdg + other;
-              const gap = Math.max(0, budgetRequired - available);
-
-              totalBudget += budgetRequired;
-              totalGovernment += government;
-              totalPartners += partners;
-              totalSDG += sdg;
-              totalOther += other;
-              totalAvailable += available;
-              totalGap += gap;
-            }
+                const gov = Number(activity.budget.government_treasury || 0);
+                const partners = Number(activity.budget.partners_funding || 0);
+                const sdg = Number(activity.budget.sdg_funding || 0);
+                const other = Number(activity.budget.other_funding || 0);
+                
+                total += cost;
+                governmentTotal += gov;
+                partnersTotal += partners;
+                sdgTotal += sdg;
+                otherTotal += other;
+                totalFunding += (gov + partners + sdg + other);
+              }
+            });
           });
         });
       });
-    });
+    } catch (e) {
+      console.error('Error calculating budget totals:', e);
+    }
 
-    return {
-      totalBudget,
-      totalGovernment,
-      totalPartners,
-      totalSDG,
-      totalOther,
-      totalAvailable,
-      totalGap
+    return { 
+      total, 
+      totalFunding, 
+      fundingGap: Math.max(0, total - totalFunding),
+      governmentTotal,
+      partnersTotal,
+      sdgTotal,
+      otherTotal
     };
   };
 
-  // Update chart data when plans data changes
-  useEffect(() => {
-    if (allPlans?.data) {
-      const plans = allPlans.data;
-      
-      // Plan Status Distribution
-      const statusCounts = {
-        DRAFT: plans.filter((p: any) => p.status === 'DRAFT').length,
-        SUBMITTED: plans.filter((p: any) => p.status === 'SUBMITTED').length,
-        APPROVED: plans.filter((p: any) => p.status === 'APPROVED').length,
-        REJECTED: plans.filter((p: any) => p.status === 'REJECTED').length
-      };
+  const stats = calculateStats();
 
-      setPlanStatusData({
-        labels: ['Draft', 'Submitted', 'Approved', 'Rejected'],
-        datasets: [{
-          data: [statusCounts.DRAFT, statusCounts.SUBMITTED, statusCounts.APPROVED, statusCounts.REJECTED],
-          backgroundColor: ['#9CA3AF', '#F59E0B', '#10B981', '#EF4444'],
-          borderWidth: 2,
-          borderColor: '#ffffff'
-        }]
-      });
+  // Prepare chart data
+  const planStatusData = {
+    labels: ['Draft', 'Submitted', 'Approved', 'Rejected'],
+    datasets: [{
+      data: [stats.draftPlans, stats.pendingPlans, stats.approvedPlans, stats.rejectedPlans],
+      backgroundColor: ['#9CA3AF', '#F59E0B', '#10B981', '#EF4444'],
+      borderWidth: 2,
+      borderColor: '#ffffff'
+    }]
+  };
 
-      // Organization Submission Data
-      const orgCounts: Record<string, number> = {};
-      plans.forEach((plan: any) => {
-        const orgName = plan.organizationName || organizationsMap[plan.organization] || 'Unknown';
-        orgCounts[orgName] = (orgCounts[orgName] || 0) + 1;
-      });
+  const budgetDistributionData = {
+    labels: ['Government', 'Partners', 'SDG', 'Other', 'Gap'],
+    datasets: [{
+      data: [
+        calculateBudgetTotals(allPlans || []).governmentTotal,
+        calculateBudgetTotals(allPlans || []).partnersTotal,
+        calculateBudgetTotals(allPlans || []).sdgTotal,
+        calculateBudgetTotals(allPlans || []).otherTotal,
+        calculateBudgetTotals(allPlans || []).fundingGap
+      ],
+      backgroundColor: ['#3B82F6', '#8B5CF6', '#10B981', '#F59E0B', '#EF4444'],
+      borderWidth: 2,
+      borderColor: '#ffffff'
+    }]
+  };
 
-      const topOrgs = Object.entries(orgCounts)
-        .sort(([,a], [,b]) => b - a)
-        .slice(0, 10);
+  // Monthly submission trends
+  const getMonthlyTrends = () => {
+    if (!allPlans || !Array.isArray(allPlans)) return { labels: [], datasets: [] };
 
-      setOrgSubmissionData({
-        labels: topOrgs.map(([name]) => name),
-        datasets: [{
+    const monthlyData: Record<string, number> = {};
+    const monthlyBudget: Record<string, number> = {};
+    
+    allPlans.forEach(plan => {
+      if (plan.submitted_at) {
+        const month = format(new Date(plan.submitted_at), 'MMM yyyy');
+        monthlyData[month] = (monthlyData[month] || 0) + 1;
+        
+        // Calculate plan budget using SubActivity model
+        const planBudget = calculatePlanBudget(plan);
+        monthlyBudget[month] = (monthlyBudget[month] || 0) + planBudget;
+      }
+    });
+
+    const sortedMonths = Object.keys(monthlyData).sort((a, b) => 
+      new Date(a).getTime() - new Date(b).getTime()
+    );
+
+    return {
+      labels: sortedMonths,
+      datasets: [
+        {
           label: 'Plans Submitted',
-          data: topOrgs.map(([,count]) => count),
-          backgroundColor: '#3B82F6',
-          borderColor: '#1D4ED8',
-          borderWidth: 1
-        }]
-      });
-
-      // Budget Analysis using SubActivity model
-      const budgetTotals = calculateBudgetTotals(plans);
-      
-      setBudgetData({
-        labels: ['Government', 'Partners', 'SDG', 'Other', 'Gap'],
-        datasets: [{
-          label: 'Budget Distribution (ETB)',
-          data: [
-            budgetTotals.totalGovernment,
-            budgetTotals.totalPartners,
-            budgetTotals.totalSDG,
-            budgetTotals.totalOther,
-            budgetTotals.totalGap
-          ],
-          backgroundColor: ['#10B981', '#8B5CF6', '#F59E0B', '#6B7280', '#EF4444'],
-          borderWidth: 2,
-          borderColor: '#ffffff'
-        }]
-      });
-
-      // Budget Trends (monthly aggregation)
-      const monthlyBudgets: Record<string, number> = {};
-      plans.forEach((plan: any) => {
-        if (plan.created_at) {
-          try {
-            const month = format(new Date(plan.created_at), 'MMM yyyy');
-            const planBudget = calculateBudgetTotals([plan]);
-            monthlyBudgets[month] = (monthlyBudgets[month] || 0) + planBudget.totalBudget;
-          } catch (e) {
-            console.error('Error processing plan date:', e);
-          }
-        }
-      });
-
-      const sortedMonths = Object.entries(monthlyBudgets)
-        .sort(([a], [b]) => new Date(a).getTime() - new Date(b).getTime())
-        .slice(-6); // Last 6 months
-
-      setBudgetTrendsData({
-        labels: sortedMonths.map(([month]) => month),
-        datasets: [{
-          label: 'Total Budget (ETB)',
-          data: sortedMonths.map(([,budget]) => budget),
+          data: sortedMonths.map(month => monthlyData[month]),
           borderColor: '#3B82F6',
           backgroundColor: 'rgba(59, 130, 246, 0.1)',
           tension: 0.4,
           fill: true
-        }]
-      });
-    }
-  }, [allPlans?.data, organizationsMap]);
-
-  // Manual refresh function
-  const handleRefresh = async () => {
-    setIsRefreshing(true);
-    setError(null);
-    try {
-      await auth.getCurrentUser();
-      await refetch();
-      setSuccess('Dashboard data refreshed successfully');
-      setTimeout(() => setSuccess(null), 3000);
-    } catch (err) {
-      setError('Failed to refresh dashboard data');
-    } finally {
-      setIsRefreshing(false);
-    }
+        },
+        {
+          label: 'Budget Value (Thousands)',
+          data: sortedMonths.map(month => Math.round(monthlyBudget[month] / 1000)),
+          borderColor: '#10B981',
+          backgroundColor: 'rgba(16, 185, 129, 0.1)',
+          tension: 0.4,
+          fill: true,
+          yAxisID: 'y1'
+        }
+      ]
+    };
   };
 
-  // Review mutation (approve or reject)
-  const reviewMutation = useMutation({
+  // Calculate individual plan budget using SubActivity model
+  const calculatePlanBudget = (plan: any) => {
+    let total = 0;
+
+    try {
+      if (plan.objectives && Array.isArray(plan.objectives)) {
+        plan.objectives.forEach((objective: any) => {
+          if (objective.initiatives && Array.isArray(objective.initiatives)) {
+            objective.initiatives.forEach((initiative: any) => {
+              if (initiative.main_activities && Array.isArray(initiative.main_activities)) {
+                initiative.main_activities.forEach((activity: any) => {
+                  // Use SubActivity budget calculation
+                  if (activity.sub_activities && Array.isArray(activity.sub_activities) && activity.sub_activities.length > 0) {
+                    activity.sub_activities.forEach((subActivity: any) => {
+                      const subCost = subActivity.budget_calculation_type === 'WITH_TOOL'
+                        ? Number(subActivity.estimated_cost_with_tool || 0)
+                        : Number(subActivity.estimated_cost_without_tool || 0);
+                      total += subCost;
+                    });
+                  } else if (activity.budget) {
+                    // Fallback to legacy budget
+                    const cost = activity.budget.budget_calculation_type === 'WITH_TOOL'
+                      ? Number(activity.budget.estimated_cost_with_tool || 0)
+                      : Number(activity.budget.estimated_cost_without_tool || 0);
+                    total += cost;
+                  }
+                });
+              }
+            });
+          }
+        });
+      }
+    } catch (e) {
+      console.error('Error calculating plan budget:', e);
+    }
+
+    return total;
+  };
+
+  // Organization performance data
+  const getOrganizationPerformance = () => {
+    if (!allPlans || !allOrganizations) return { labels: [], datasets: [] };
+
+    const orgStats: Record<string, { submitted: number; approved: number; budget: number }> = {};
+    
+    allPlans.forEach(plan => {
+      const orgName = organizationsMap[plan.organization] || `Org ${plan.organization}`;
+      if (!orgStats[orgName]) {
+        orgStats[orgName] = { submitted: 0, approved: 0, budget: 0 };
+      }
+      
+      if (plan.status === 'SUBMITTED' || plan.status === 'APPROVED') {
+        orgStats[orgName].submitted += 1;
+      }
+      if (plan.status === 'APPROVED') {
+        orgStats[orgName].approved += 1;
+      }
+      
+      orgStats[orgName].budget += calculatePlanBudget(plan);
+    });
+
+    const orgNames = Object.keys(orgStats).slice(0, 10); // Top 10 organizations
+
+    return {
+      labels: orgNames,
+      datasets: [
+        {
+          label: 'Plans Submitted',
+          data: orgNames.map(name => orgStats[name].submitted),
+          backgroundColor: 'rgba(59, 130, 246, 0.8)',
+        },
+        {
+          label: 'Plans Approved',
+          data: orgNames.map(name => orgStats[name].approved),
+          backgroundColor: 'rgba(16, 185, 129, 0.8)',
+        }
+      ]
+    };
+  };
+
+  // Filter and sort plans
+  const getFilteredPlans = (plans: any[]) => {
+    if (!plans) return [];
+
+    let filtered = plans.filter(plan => {
+      const matchesSearch = !searchTerm || 
+        plan.planner_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        organizationsMap[plan.organization]?.toLowerCase().includes(searchTerm.toLowerCase());
+      
+      const matchesStatus = statusFilter === 'all' || plan.status === statusFilter;
+      
+      const matchesDateRange = !dateRange.from || !dateRange.to || 
+        (plan.submitted_at && 
+         new Date(plan.submitted_at) >= new Date(dateRange.from) &&
+         new Date(plan.submitted_at) <= new Date(dateRange.to));
+
+      return matchesSearch && matchesStatus && matchesDateRange;
+    });
+
+    // Sort plans
+    filtered.sort((a, b) => {
+      let aValue, bValue;
+      
+      switch (sortBy) {
+        case 'date':
+          aValue = new Date(a.submitted_at || a.created_at).getTime();
+          bValue = new Date(b.submitted_at || b.created_at).getTime();
+          break;
+        case 'organization':
+          aValue = organizationsMap[a.organization] || '';
+          bValue = organizationsMap[b.organization] || '';
+          break;
+        case 'status':
+          aValue = a.status;
+          bValue = b.status;
+          break;
+        default:
+          return 0;
+      }
+
+      if (sortOrder === 'asc') {
+        return aValue > bValue ? 1 : -1;
+      } else {
+        return aValue < bValue ? 1 : -1;
+      }
+    });
+
+    return filtered;
+  };
+
+  // Review plan mutation
+  const reviewPlanMutation = useMutation({
     mutationFn: async (reviewData: { planId: string, status: 'APPROVED' | 'REJECTED', feedback: string }) => {
       try {
-        console.log(`Admin reviewing plan ${reviewData.planId} with status: ${reviewData.status}`);
-        
         await auth.getCurrentUser();
         await api.get('/auth/csrf/');
-        const csrfToken = Cookies.get('csrftoken');
-        
-        const reviewPayload = {
-          status: reviewData.status,
-          feedback: reviewData.feedback || ''
-        };
         
         const timestamp = new Date().getTime();
         
         if (reviewData.status === 'APPROVED') {
-          const response = await api.post(`/plans/${reviewData.planId}/approve/?_=${timestamp}`, reviewPayload);
-          return response;
+          return api.post(`/plans/${reviewData.planId}/approve/?_=${timestamp}`, { 
+            feedback: reviewData.feedback 
+          });
         } else {
-          const response = await api.post(`/plans/${reviewData.planId}/reject/?_=${timestamp}`, reviewPayload);
-          return response;
+          return api.post(`/plans/${reviewData.planId}/reject/?_=${timestamp}`, { 
+            feedback: reviewData.feedback 
+          });
         }
       } catch (error) {
-        console.error('Admin review submission failed:', error);
+        console.error('Review submission failed:', error);
         throw error;
       }
     },
@@ -447,72 +515,33 @@ const AdminDashboard: React.FC = () => {
       setTimeout(() => setSuccess(null), 3000);
     },
     onError: (error: any) => {
-      console.error('Admin review mutation error:', error);
       setError(error.message || 'Failed to submit review');
       setTimeout(() => setError(null), 5000);
     },
   });
 
-  const handleViewPlan = async (plan: any) => {
-    if (!plan || !plan.id) {
-      setError('Invalid plan data for viewing');
-      return;
-    }
-    
-    console.log('Admin navigating to plan details:', plan.id);
+  // Event handlers
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
     setError(null);
-    
     try {
-      navigate(`/plans/${plan.id}`);
+      await refetchPlans();
+      setSuccess('Data refreshed successfully');
+      setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
-      console.error('Failed to navigate to plan:', err);
-      setError('Error accessing plan. Please try again.');
+      setError('Failed to refresh data');
+    } finally {
+      setIsRefreshing(false);
     }
   };
 
-  const handleReviewPlan = async (plan: any) => {
-    if (!plan || !plan.id) {
-      setError('Invalid plan data for review');
-      return;
-    }
-    
-    try {
-      await auth.getCurrentUser();
-      console.log('Admin opening review modal for plan:', plan.id);
-      setSelectedPlan(plan);
-      setShowReviewModal(true);
-    } catch (error) {
-      console.error('Authentication failed:', error);
-      setError('Failed to authenticate. Please try again.');
-    }
+  const handleViewPlan = (plan: any) => {
+    navigate(`/plans/${plan.id}`);
   };
 
-  const handleReviewSubmit = async (data: { status: 'APPROVED' | 'REJECTED'; feedback: string }) => {
-    if (!selectedPlan) return;
-    
-    try {
-      await reviewMutation.mutateAsync({
-        planId: selectedPlan.id,
-        status: data.status,
-        feedback: data.feedback
-      });
-    } catch (error) {
-      console.error('Failed to submit admin review:', error);
-      
-      let errorMessage = 'Failed to submit review';
-      if (error.response?.status === 403) {
-        errorMessage = 'Permission denied. You may not have admin permissions.';
-      } else if (error.response?.status === 404) {
-        errorMessage = 'Plan not found or no longer available for review.';
-      } else if (error.response?.status === 400) {
-        errorMessage = 'Invalid review data. Please check your input.';
-      } else if (error.message) {
-        errorMessage = error.message;
-      }
-      
-      setError(errorMessage);
-      setTimeout(() => setError(null), 5000);
-    }
+  const handleReviewPlan = (plan: any) => {
+    setSelectedPlan(plan);
+    setShowReviewModal(true);
   };
 
   const formatDate = (dateString: string | null | undefined) => {
@@ -520,33 +549,34 @@ const AdminDashboard: React.FC = () => {
     try {
       return format(new Date(dateString), 'MMM d, yyyy');
     } catch (e) {
-      console.error('Error formatting date:', e);
       return 'Invalid date';
     }
   };
 
-  const getOrganizationName = (plan: any) => {
-    if (plan.organizationName) return plan.organizationName;
-    if (plan.organization_name) return plan.organization_name;
-    if (plan.organization && organizationsMap[plan.organization]) {
-      return organizationsMap[plan.organization];
-    }
-    return 'Unknown Organization';
+  const formatCurrency = (amount: number) => {
+    return `$${amount.toLocaleString()}`;
   };
 
-  // Calculate summary statistics
-  const allPlansData = allPlans?.data || [];
-  const pendingCount = pendingPlans?.data?.length || 0;
-  const reviewedCount = reviewedPlans?.data?.length || 0;
-  const approvedCount = allPlansData.filter((p: any) => p.status === 'APPROVED').length;
-  const rejectedCount = allPlansData.filter((p: any) => p.status === 'REJECTED').length;
-  const draftCount = allPlansData.filter((p: any) => p.status === 'DRAFT').length;
-  const totalPlans = allPlansData.length;
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'DRAFT': return 'bg-gray-100 text-gray-800';
+      case 'SUBMITTED': return 'bg-yellow-100 text-yellow-800';
+      case 'APPROVED': return 'bg-green-100 text-green-800';
+      case 'REJECTED': return 'bg-red-100 text-red-800';
+      default: return 'bg-gray-100 text-gray-800';
+    }
+  };
 
-  // Calculate budget totals using SubActivity model
-  const budgetTotals = calculateBudgetTotals(allPlansData);
+  const getOrganizationName = (plan: any) => {
+    return organizationsMap[plan.organization] || `Organization ${plan.organization}`;
+  };
 
-  if (isLoading) {
+  // Get filtered plans for current tab
+  const pendingPlans = getFilteredPlans(allPlans?.filter(p => p.status === 'SUBMITTED') || []);
+  const reviewedPlans = getFilteredPlans(allPlans?.filter(p => ['APPROVED', 'REJECTED'].includes(p.status)) || []);
+  const allFilteredPlans = getFilteredPlans(allPlans || []);
+
+  if (isLoadingPlans || isLoadingOrgs) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
         <Loader className="h-6 w-6 animate-spin mr-2 text-green-600" />
@@ -557,11 +587,25 @@ const AdminDashboard: React.FC = () => {
 
   return (
     <div className="px-4 py-6 sm:px-0">
+      {/* Header */}
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Admin Dashboard</h1>
-        <p className="text-gray-600">System-wide analytics and plan management</p>
+        <div className="flex justify-between items-center">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Admin Dashboard</h1>
+            <p className="text-gray-600">System-wide overview and management</p>
+          </div>
+          <button
+            onClick={handleRefresh}
+            disabled={isRefreshing}
+            className="flex items-center px-4 py-2 text-sm text-blue-600 hover:text-blue-800 border border-blue-200 rounded-md disabled:opacity-50"
+          >
+            {isRefreshing ? <Loader className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}
+            Refresh Data
+          </button>
+        </div>
       </div>
 
+      {/* Status Messages */}
       {error && (
         <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg flex items-center text-red-700">
           <AlertCircle className="h-5 w-5 mr-2" />
@@ -579,69 +623,33 @@ const AdminDashboard: React.FC = () => {
       {/* Tab Navigation */}
       <div className="mb-6">
         <div className="border-b border-gray-200">
-          <nav className="flex -mb-px">
-            <button
-              onClick={() => setActiveTab('overview')}
-              className={`mr-8 py-4 px-1 border-b-2 font-medium text-sm ${
-                activeTab === 'overview'
-                  ? 'border-green-600 text-green-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}
-            >
-              <div className="flex items-center">
-                <LayoutGrid className="h-5 w-5 mr-2" />
-                Overview
-              </div>
-            </button>
-            <button
-              onClick={() => setActiveTab('pending')}
-              className={`mr-8 py-4 px-1 border-b-2 font-medium text-sm ${
-                activeTab === 'pending'
-                  ? 'border-green-600 text-green-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}
-            >
-              <div className="flex items-center">
-                <Bell className="h-5 w-5 mr-2" />
-                Pending Reviews
-                {pendingCount > 0 && (
+          <nav className="flex -mb-px space-x-8">
+            {[
+              { key: 'overview', label: 'Overview', icon: BarChart3 },
+              { key: 'pending', label: 'Pending Reviews', icon: Clock, count: stats.pendingPlans },
+              { key: 'reviewed', label: 'Reviewed Plans', icon: CheckCircle, count: stats.approvedPlans + stats.rejectedPlans },
+              { key: 'analytics', label: 'Analytics', icon: TrendingUp },
+              { key: 'organizations', label: 'Organizations', icon: Building2 },
+              { key: 'users', label: 'Users', icon: Users }
+            ].map(tab => (
+              <button
+                key={tab.key}
+                onClick={() => setActiveTab(tab.key as any)}
+                className={`py-4 px-1 border-b-2 font-medium text-sm flex items-center ${
+                  activeTab === tab.key
+                    ? 'border-green-600 text-green-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                }`}
+              >
+                <tab.icon className="h-5 w-5 mr-2" />
+                {tab.label}
+                {tab.count !== undefined && tab.count > 0 && (
                   <span className="ml-2 bg-red-100 text-red-800 px-2 py-0.5 rounded-full text-xs">
-                    {pendingCount}
+                    {tab.count}
                   </span>
                 )}
-              </div>
-            </button>
-            <button
-              onClick={() => setActiveTab('reviewed')}
-              className={`mr-8 py-4 px-1 border-b-2 font-medium text-sm ${
-                activeTab === 'reviewed'
-                  ? 'border-green-600 text-green-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}
-            >
-              <div className="flex items-center">
-                <CheckCircle className="h-5 w-5 mr-2" />
-                Reviewed Plans
-                {reviewedCount > 0 && (
-                  <span className="ml-2 bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full text-xs">
-                    {reviewedCount}
-                  </span>
-                )}
-              </div>
-            </button>
-            <button
-              onClick={() => setActiveTab('analytics')}
-              className={`py-4 px-1 border-b-2 font-medium text-sm ${
-                activeTab === 'analytics'
-                  ? 'border-green-600 text-green-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}
-            >
-              <div className="flex items-center">
-                <BarChart3 className="h-5 w-5 mr-2" />
-                Analytics
-              </div>
-            </button>
+              </button>
+            ))}
           </nav>
         </div>
       </div>
@@ -650,487 +658,270 @@ const AdminDashboard: React.FC = () => {
       {activeTab === 'overview' && (
         <div className="space-y-6">
           {/* Summary Statistics Cards */}
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
-            <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
-              <div className="flex items-center justify-between mb-1">
-                <h3 className="text-sm font-medium text-gray-500">Total Plans</h3>
-                <FileText className="h-5 w-5 text-blue-500" />
-              </div>
-              <p className="text-3xl font-semibold text-blue-600">{totalPlans}</p>
-            </div>
-
-            <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
-              <div className="flex items-center justify-between mb-1">
-                <h3 className="text-sm font-medium text-gray-500">Draft Plans</h3>
-                <FileText className="h-5 w-5 text-gray-500" />
-              </div>
-              <p className="text-3xl font-semibold text-gray-600">{draftCount}</p>
-            </div>
-
-            <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
-              <div className="flex items-center justify-between mb-1">
-                <h3 className="text-sm font-medium text-gray-500">Pending Reviews</h3>
-                <Bell className="h-5 w-5 text-amber-500" />
-              </div>
-              <p className="text-3xl font-semibold text-amber-600">{pendingCount}</p>
-            </div>
-
-            <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
-              <div className="flex items-center justify-between mb-1">
-                <h3 className="text-sm font-medium text-gray-500">Approved Plans</h3>
-                <CheckCircle className="h-5 w-5 text-green-500" />
-              </div>
-              <p className="text-3xl font-semibold text-green-600">{approvedCount}</p>
-            </div>
-
-            <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
-              <div className="flex items-center justify-between mb-1">
-                <h3 className="text-sm font-medium text-gray-500">Rejected Plans</h3>
-                <XCircle className="h-5 w-5 text-red-500" />
-              </div>
-              <p className="text-3xl font-semibold text-red-600">{rejectedCount}</p>
-            </div>
-
-            <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
-              <div className="flex items-center justify-between mb-1">
-                <h3 className="text-sm font-medium text-gray-500">Organizations</h3>
-                <Building2 className="h-5 w-5 text-purple-500" />
-              </div>
-              <p className="text-3xl font-semibold text-purple-600">{Object.keys(organizationsMap).length}</p>
-            </div>
-          </div>
-
-          {/* Budget Summary Cards */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="text-sm font-medium text-gray-500">Total Budget Required</h3>
-                <DollarSign className="h-6 w-6 text-blue-500" />
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-gray-500">Total Plans</p>
+                  <p className="text-3xl font-semibold text-gray-900">{stats.totalPlans}</p>
+                </div>
+                <FileText className="h-8 w-8 text-blue-500" />
               </div>
-              <p className="text-2xl font-bold text-blue-600">
-                ETB {budgetTotals.totalBudget.toLocaleString()}
-              </p>
-              <p className="text-xs text-gray-500 mt-1">Across all plans</p>
+              <div className="mt-2 text-sm text-gray-600">
+                <span className="text-green-600">+{stats.recentSubmissions}</span> this week
+              </div>
             </div>
 
             <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="text-sm font-medium text-gray-500">Total Available Funding</h3>
-                <TrendingUp className="h-6 w-6 text-green-500" />
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-gray-500">Pending Reviews</p>
+                  <p className="text-3xl font-semibold text-yellow-600">{stats.pendingPlans}</p>
+                </div>
+                <Clock className="h-8 w-8 text-yellow-500" />
               </div>
-              <p className="text-2xl font-bold text-green-600">
-                ETB {budgetTotals.totalAvailable.toLocaleString()}
-              </p>
-              <p className="text-xs text-gray-500 mt-1">From all sources</p>
+              <div className="mt-2 text-sm text-gray-600">
+                Awaiting evaluation
+              </div>
             </div>
 
             <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="text-sm font-medium text-gray-500">Funding Gap</h3>
-                <AlertCircle className="h-6 w-6 text-red-500" />
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-gray-500">Approved Plans</p>
+                  <p className="text-3xl font-semibold text-green-600">{stats.approvedPlans}</p>
+                </div>
+                <CheckCircle className="h-8 w-8 text-green-500" />
               </div>
-              <p className="text-2xl font-bold text-red-600">
-                ETB {budgetTotals.totalGap.toLocaleString()}
-              </p>
-              <p className="text-xs text-gray-500 mt-1">Additional funding needed</p>
+              <div className="mt-2 text-sm text-gray-600">
+                {stats.totalPlans > 0 ? Math.round((stats.approvedPlans / stats.totalPlans) * 100) : 0}% approval rate
+              </div>
             </div>
 
             <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="text-sm font-medium text-gray-500">Funding Coverage</h3>
-                <PieChart className="h-6 w-6 text-purple-500" />
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-gray-500">Total Budget</p>
+                  <p className="text-3xl font-semibold text-blue-600">{formatCurrency(stats.totalBudget)}</p>
+                </div>
+                <DollarSign className="h-8 w-8 text-blue-500" />
               </div>
-              <p className="text-2xl font-bold text-purple-600">
-                {budgetTotals.totalBudget > 0 
-                  ? `${((budgetTotals.totalAvailable / budgetTotals.totalBudget) * 100).toFixed(1)}%`
-                  : '0%'
-                }
-              </p>
-              <p className="text-xs text-gray-500 mt-1">Budget coverage ratio</p>
+              <div className="mt-2 text-sm text-gray-600">
+                Avg: {formatCurrency(stats.avgPlanValue)}
+              </div>
             </div>
           </div>
 
-          {/* Quick Actions */}
-          <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
-            <h3 className="text-lg font-medium text-gray-900 mb-4">Quick Actions</h3>
-            <div className="flex flex-wrap gap-3">
-              <button
-                onClick={handleRefresh}
-                disabled={isRefreshing}
-                className="flex items-center px-4 py-2 text-sm text-blue-600 hover:text-blue-800 border border-blue-200 rounded-md disabled:opacity-50"
-              >
-                {isRefreshing ? <Loader className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}
-                Refresh Data
-              </button>
-              
-              <button
-                onClick={() => setActiveTab('pending')}
-                className="flex items-center px-4 py-2 text-sm text-amber-600 hover:text-amber-800 border border-amber-200 rounded-md"
-              >
-                <Bell className="h-4 w-4 mr-2" />
-                Review Pending Plans ({pendingCount})
-              </button>
-              
-              <button
-                onClick={() => setActiveTab('analytics')}
-                className="flex items-center px-4 py-2 text-sm text-purple-600 hover:text-purple-800 border border-purple-200 rounded-md"
-              >
-                <BarChart3 className="h-4 w-4 mr-2" />
-                View Analytics
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Analytics Tab */}
-      {activeTab === 'analytics' && (
-        <div className="space-y-6">
+          {/* Charts Row */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Plan Status Distribution */}
             <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
               <h3 className="text-lg font-medium text-gray-900 mb-4">Plan Status Distribution</h3>
               <div className="h-64">
-                <Doughnut 
-                  data={planStatusData}
-                  options={{
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                      legend: {
-                        position: 'bottom'
-                      }
-                    }
-                  }}
-                />
+                <Doughnut data={planStatusData} options={chartOptions} />
               </div>
             </div>
 
             {/* Budget Distribution */}
             <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
-              <h3 className="text-lg font-medium text-gray-900 mb-4">Budget Distribution by Source</h3>
+              <h3 className="text-lg font-medium text-gray-900 mb-4">Budget & Funding Distribution</h3>
               <div className="h-64">
-                <Doughnut 
-                  data={budgetData}
-                  options={{
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                      legend: {
-                        position: 'bottom'
+                <Doughnut data={budgetDistributionData} options={chartOptions} />
+              </div>
+            </div>
+          </div>
+
+          {/* Monthly Trends */}
+          <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+            <h3 className="text-lg font-medium text-gray-900 mb-4">Monthly Submission Trends</h3>
+            <div className="h-80">
+              <Line 
+                data={getMonthlyTrends()} 
+                options={{
+                  ...chartOptions,
+                  scales: {
+                    y: {
+                      type: 'linear',
+                      display: true,
+                      position: 'left',
+                    },
+                    y1: {
+                      type: 'linear',
+                      display: true,
+                      position: 'right',
+                      grid: {
+                        drawOnChartArea: false,
                       },
-                      tooltip: {
-                        callbacks: {
-                          label: function(context) {
-                            const label = context.label || '';
-                            const value = context.parsed || 0;
-                            return `${label}: ETB ${value.toLocaleString()}`;
-                          }
-                        }
-                      }
-                    }
-                  }}
-                />
-              </div>
-            </div>
-
-            {/* Organization Submissions */}
-            <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
-              <h3 className="text-lg font-medium text-gray-900 mb-4">Plans by Organization</h3>
-              <div className="h-64">
-                <Bar 
-                  data={orgSubmissionData}
-                  options={{
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                      legend: {
-                        display: false
-                      }
                     },
-                    scales: {
-                      y: {
-                        beginAtZero: true,
-                        ticks: {
-                          stepSize: 1
-                        }
-                      }
-                    }
-                  }}
-                />
-              </div>
-            </div>
-
-            {/* Budget Trends */}
-            <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
-              <h3 className="text-lg font-medium text-gray-900 mb-4">Budget Trends (Last 6 Months)</h3>
-              <div className="h-64">
-                <Line 
-                  data={budgetTrendsData}
-                  options={{
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                      legend: {
-                        display: false
-                      }
-                    },
-                    scales: {
-                      y: {
-                        beginAtZero: true,
-                        ticks: {
-                          callback: function(value) {
-                            return 'ETB ' + Number(value).toLocaleString();
-                          }
-                        }
-                      }
-                    }
-                  }}
-                />
-              </div>
+                  }
+                }} 
+              />
             </div>
           </div>
 
-          {/* Detailed Budget Breakdown */}
+          {/* Organization Performance */}
           <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
-            <h3 className="text-lg font-medium text-gray-900 mb-4">Detailed Budget Analysis</h3>
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-              <div className="text-center p-4 bg-blue-50 rounded-lg">
-                <div className="text-sm text-gray-500 mb-1">Government Treasury</div>
-                <div className="text-xl font-bold text-blue-600">
-                  ETB {budgetTotals.totalGovernment.toLocaleString()}
-                </div>
-                <div className="text-xs text-gray-500 mt-1">
-                  {budgetTotals.totalBudget > 0 
-                    ? `${((budgetTotals.totalGovernment / budgetTotals.totalBudget) * 100).toFixed(1)}%`
-                    : '0%'
-                  }
-                </div>
-              </div>
-              
-              <div className="text-center p-4 bg-purple-50 rounded-lg">
-                <div className="text-sm text-gray-500 mb-1">Partners Funding</div>
-                <div className="text-xl font-bold text-purple-600">
-                  ETB {budgetTotals.totalPartners.toLocaleString()}
-                </div>
-                <div className="text-xs text-gray-500 mt-1">
-                  {budgetTotals.totalBudget > 0 
-                    ? `${((budgetTotals.totalPartners / budgetTotals.totalBudget) * 100).toFixed(1)}%`
-                    : '0%'
-                  }
-                </div>
-              </div>
-              
-              <div className="text-center p-4 bg-yellow-50 rounded-lg">
-                <div className="text-sm text-gray-500 mb-1">SDG Funding</div>
-                <div className="text-xl font-bold text-yellow-600">
-                  ETB {budgetTotals.totalSDG.toLocaleString()}
-                </div>
-                <div className="text-xs text-gray-500 mt-1">
-                  {budgetTotals.totalBudget > 0 
-                    ? `${((budgetTotals.totalSDG / budgetTotals.totalBudget) * 100).toFixed(1)}%`
-                    : '0%'
-                  }
-                </div>
-              </div>
-              
-              <div className="text-center p-4 bg-gray-50 rounded-lg">
-                <div className="text-sm text-gray-500 mb-1">Other Funding</div>
-                <div className="text-xl font-bold text-gray-600">
-                  ETB {budgetTotals.totalOther.toLocaleString()}
-                </div>
-                <div className="text-xs text-gray-500 mt-1">
-                  {budgetTotals.totalBudget > 0 
-                    ? `${((budgetTotals.totalOther / budgetTotals.totalBudget) * 100).toFixed(1)}%`
-                    : '0%'
-                  }
-                </div>
-              </div>
-              
-              <div className="text-center p-4 bg-red-50 rounded-lg">
-                <div className="text-sm text-gray-500 mb-1">Funding Gap</div>
-                <div className="text-xl font-bold text-red-600">
-                  ETB {budgetTotals.totalGap.toLocaleString()}
-                </div>
-                <div className="text-xs text-gray-500 mt-1">
-                  {budgetTotals.totalBudget > 0 
-                    ? `${((budgetTotals.totalGap / budgetTotals.totalBudget) * 100).toFixed(1)}%`
-                    : '0%'
-                  }
-                </div>
-              </div>
+            <h3 className="text-lg font-medium text-gray-900 mb-4">Top Organizations by Plan Activity</h3>
+            <div className="h-80">
+              <Bar data={getOrganizationPerformance()} options={chartOptions} />
             </div>
-          </div>
-
-          {/* Recent Activity */}
-          <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
-            <h3 className="text-lg font-medium text-gray-900 mb-4">Recent Plan Activity</h3>
-            {allPlansData.length > 0 ? (
-              <div className="space-y-3">
-                {allPlansData
-                  .sort((a: any, b: any) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
-                  .slice(0, 5)
-                  .map((plan: any) => (
-                    <div key={plan.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                      <div className="flex items-center">
-                        <Building2 className="h-5 w-5 text-gray-400 mr-3" />
-                        <div>
-                          <p className="font-medium text-gray-900">{getOrganizationName(plan)}</p>
-                          <p className="text-sm text-gray-500">
-                            {plan.planner_name} • {formatDate(plan.updated_at)}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex items-center space-x-2">
-                        <span className={`px-2 py-1 text-xs rounded-full ${
-                          plan.status === 'APPROVED' ? 'bg-green-100 text-green-800' :
-                          plan.status === 'REJECTED' ? 'bg-red-100 text-red-800' :
-                          plan.status === 'SUBMITTED' ? 'bg-yellow-100 text-yellow-800' :
-                          'bg-gray-100 text-gray-800'
-                        }`}>
-                          {plan.status}
-                        </span>
-                        <button
-                          onClick={() => handleViewPlan(plan)}
-                          className="text-blue-600 hover:text-blue-800 text-sm"
-                        >
-                          View
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-              </div>
-            ) : (
-              <div className="text-center py-8 text-gray-500">
-                <FileText className="h-12 w-12 mx-auto text-gray-400 mb-4" />
-                <p>No plans available</p>
-              </div>
-            )}
           </div>
         </div>
       )}
 
       {/* Pending Reviews Tab */}
       {activeTab === 'pending' && (
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-          <div className="p-4 sm:p-6 lg:p-8">
-            <div className="sm:flex sm:items-center">
-              <div className="sm:flex-auto">
-                <h3 className="text-lg font-medium leading-6 text-gray-900">Pending Reviews</h3>
-                <p className="mt-1 text-sm text-gray-500">
-                  All plans submitted for review across the system.
-                </p>
-              </div>
-              <div className="mt-4 sm:mt-0 sm:ml-16 sm:flex-none">
-                <div className="flex items-center">
-                  <Bell className="h-6 w-6 text-gray-400 mr-2" />
-                  <span className="bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center">
-                    {pendingCount}
-                  </span>
+        <div className="space-y-6">
+          {/* Filters */}
+          <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Search</label>
+                <div className="relative">
+                  <Search className="h-4 w-4 absolute left-3 top-3 text-gray-400" />
+                  <input
+                    type="text"
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    placeholder="Search by planner or organization..."
+                    className="pl-10 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                  />
                 </div>
               </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Sort By</label>
+                <select
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value as any)}
+                  className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                >
+                  <option value="date">Submission Date</option>
+                  <option value="organization">Organization</option>
+                  <option value="status">Status</option>
+                </select>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Order</label>
+                <button
+                  onClick={() => setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')}
+                  className="flex items-center justify-center w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
+                >
+                  {sortOrder === 'asc' ? <ArrowUp className="h-4 w-4 mr-1" /> : <ArrowDown className="h-4 w-4 mr-1" />}
+                  {sortOrder === 'asc' ? 'Ascending' : 'Descending'}
+                </button>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Actions</label>
+                <button
+                  onClick={() => {
+                    setSearchTerm('');
+                    setStatusFilter('all');
+                    setDateRange({ from: '', to: '' });
+                  }}
+                  className="w-full px-3 py-2 text-sm text-gray-600 bg-gray-100 rounded-md hover:bg-gray-200"
+                >
+                  Clear Filters
+                </button>
+              </div>
             </div>
+          </div>
 
-            <div className="mb-4 flex justify-end">
-              <button
-                onClick={handleRefresh}
-                disabled={isRefreshing}
-                className="flex items-center px-4 py-2 text-sm text-blue-600 hover:text-blue-800 border border-blue-200 rounded-md disabled:opacity-50"
-              >
-                {isRefreshing ? <Loader className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}
-                Refresh Plans
-              </button>
+          {/* Pending Plans Table */}
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-200">
+              <h3 className="text-lg font-medium text-gray-900">
+                Pending Reviews ({pendingPlans.length})
+              </h3>
             </div>
-
-            {!pendingPlans?.data || pendingPlans.data.length === 0 ? (
-              <div className="text-center py-12 bg-gray-50 rounded-lg border-2 border-dashed border-gray-200">
-                <Bell className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-                <h3 className="text-lg font-medium text-gray-900 mb-1">No pending plans</h3>
-                <p className="text-gray-500 max-w-lg mx-auto">
-                  There are no plans waiting for review across the system.
-                </p>
+            
+            {pendingPlans.length === 0 ? (
+              <div className="text-center py-12">
+                <Clock className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+                <h3 className="text-lg font-medium text-gray-900 mb-1">No pending reviews</h3>
+                <p className="text-gray-500">All submitted plans have been reviewed.</p>
               </div>
             ) : (
-              <div className="mt-6 overflow-hidden overflow-x-auto border border-gray-200 rounded-lg">
+              <div className="overflow-x-auto">
                 <table className="min-w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50">
                     <tr>
-                      <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                         Organization
                       </th>
-                      <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                         Planner
                       </th>
-                      <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                         Plan Type
                       </th>
-                      <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                         Submitted Date
                       </th>
-                      <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Planning Period
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Budget
                       </th>
-                      <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                         Status
                       </th>
-                      <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                         Actions
                       </th>
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
-                    {pendingPlans.data.map((plan: any) => (
-                      <tr key={plan.id} className="hover:bg-gray-50">
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <div className="flex items-center">
-                            <Building2 className="h-5 w-5 text-gray-400 mr-2" />
-                            <span className="text-sm font-medium text-gray-900">{getOrganizationName(plan)}</span>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                          {plan.planner_name || 'Unknown Planner'}
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                          {plan.type || 'N/A'}
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <div className="flex items-center">
-                            <Calendar className="h-4 w-4 text-gray-400 mr-2" />
-                            <span className="text-sm text-gray-500">
-                              {plan.submitted_at ? formatDate(plan.submitted_at) : 'Not yet submitted'}
+                    {pendingPlans.map((plan: any) => {
+                      const planBudget = calculatePlanBudget(plan);
+                      return (
+                        <tr key={plan.id} className="hover:bg-gray-50">
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <div className="flex items-center">
+                              <Building2 className="h-5 w-5 text-gray-400 mr-2" />
+                              <span className="text-sm font-medium text-gray-900">
+                                {getOrganizationName(plan)}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {plan.planner_name || 'Unknown'}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {plan.type}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {formatDate(plan.submitted_at)}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            {formatCurrency(planBudget)}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${getStatusColor(plan.status)}`}>
+                              {plan.status}
                             </span>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                          {plan.from_date && plan.to_date ? 
-                            `${formatDate(plan.from_date)} - ${formatDate(plan.to_date)}` :
-                            'Date not available'}
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-yellow-100 text-yellow-800">
-                            {plan.status}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                          <div className="flex justify-end space-x-2">
-                            <button
-                              onClick={() => handleViewPlan(plan)}
-                              className="text-blue-600 hover:text-blue-900 flex items-center"
-                            >
-                              <Eye className="h-4 w-4 mr-1" />
-                              View
-                            </button>
-                            <button
-                              onClick={() => handleReviewPlan(plan)}
-                              className="text-green-600 hover:text-green-900 flex items-center ml-2"
-                            >
-                              <CheckCircle className="h-4 w-4 mr-1" />
-                              Review
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                            <div className="flex justify-end space-x-2">
+                              <button
+                                onClick={() => handleViewPlan(plan)}
+                                className="text-blue-600 hover:text-blue-900 flex items-center"
+                              >
+                                <Eye className="h-4 w-4 mr-1" />
+                                View
+                              </button>
+                              <button
+                                onClick={() => handleReviewPlan(plan)}
+                                className="text-green-600 hover:text-green-900 flex items-center"
+                              >
+                                <CheckCircle className="h-4 w-4 mr-1" />
+                                Review
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -1141,83 +932,149 @@ const AdminDashboard: React.FC = () => {
 
       {/* Reviewed Plans Tab */}
       {activeTab === 'reviewed' && (
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-          <div className="p-4 sm:p-6 lg:p-8">
-            <div className="sm:flex sm:items-center">
-              <div className="sm:flex-auto">
-                <h3 className="text-lg font-medium leading-6 text-gray-900">Reviewed Plans</h3>
-                <p className="mt-1 text-sm text-gray-500">
-                  All plans that have been reviewed (approved or rejected) across the system.
-                </p>
+        <div className="space-y-6">
+          {/* Filters (same as pending) */}
+          <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Search</label>
+                <div className="relative">
+                  <Search className="h-4 w-4 absolute left-3 top-3 text-gray-400" />
+                  <input
+                    type="text"
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    placeholder="Search by planner or organization..."
+                    className="pl-10 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                  />
+                </div>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                  className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                >
+                  <option value="all">All Status</option>
+                  <option value="APPROVED">Approved</option>
+                  <option value="REJECTED">Rejected</option>
+                </select>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Sort By</label>
+                <select
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value as any)}
+                  className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                >
+                  <option value="date">Review Date</option>
+                  <option value="organization">Organization</option>
+                  <option value="status">Status</option>
+                </select>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Date Range</label>
+                <div className="flex space-x-2">
+                  <input
+                    type="date"
+                    value={dateRange.from}
+                    onChange={(e) => setDateRange(prev => ({ ...prev, from: e.target.value }))}
+                    className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                  />
+                  <input
+                    type="date"
+                    value={dateRange.to}
+                    onChange={(e) => setDateRange(prev => ({ ...prev, to: e.target.value }))}
+                    className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                  />
+                </div>
               </div>
             </div>
+          </div>
 
-            {!reviewedPlans?.data || reviewedPlans.data.length === 0 ? (
-              <div className="text-center py-12 bg-gray-50 rounded-lg border-2 border-dashed border-gray-200 mt-6">
+          {/* Reviewed Plans Table */}
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-200">
+              <h3 className="text-lg font-medium text-gray-900">
+                Reviewed Plans ({reviewedPlans.length})
+              </h3>
+            </div>
+            
+            {reviewedPlans.length === 0 ? (
+              <div className="text-center py-12">
                 <CheckCircle className="h-12 w-12 text-gray-400 mx-auto mb-4" />
                 <h3 className="text-lg font-medium text-gray-900 mb-1">No reviewed plans</h3>
-                <p className="text-gray-500 max-w-lg mx-auto">
-                  No plans have been reviewed yet across the system.
-                </p>
+                <p className="text-gray-500">No plans have been reviewed yet.</p>
               </div>
             ) : (
-              <div className="mt-6 overflow-hidden overflow-x-auto border border-gray-200 rounded-lg">
+              <div className="overflow-x-auto">
                 <table className="min-w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50">
                     <tr>
-                      <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                         Organization
                       </th>
-                      <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                         Planner
                       </th>
-                      <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                         Plan Type
                       </th>
-                      <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Planning Period
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Budget Analysis
                       </th>
-                      <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                         Status
                       </th>
-                      <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Reviewed Date
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Review Date
                       </th>
-                      <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Budget (ETB)
-                      </th>
-                      <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                         Actions
                       </th>
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
-                    {reviewedPlans.data.map((plan: any) => {
-                      const planBudget = calculateBudgetTotals([plan]);
+                    {reviewedPlans.map((plan: any) => {
+                      const planBudget = calculatePlanBudget(plan);
+                      const budgetDetails = calculateBudgetTotals([plan]);
+                      const fundingCoverage = planBudget > 0 ? (budgetDetails.totalFunding / planBudget) * 100 : 0;
                       
                       return (
                         <tr key={plan.id} className="hover:bg-gray-50">
                           <td className="px-6 py-4 whitespace-nowrap">
                             <div className="flex items-center">
                               <Building2 className="h-5 w-5 text-gray-400 mr-2" />
-                              <span className="text-sm font-medium text-gray-900">{getOrganizationName(plan)}</span>
+                              <span className="text-sm font-medium text-gray-900">
+                                {getOrganizationName(plan)}
+                              </span>
                             </div>
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                            {plan.planner_name || 'Unknown Planner'}
+                            {plan.planner_name || 'Unknown'}
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                            {plan.type || 'N/A'}
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                            {plan.from_date && plan.to_date ? 
-                              `${formatDate(plan.from_date)} - ${formatDate(plan.to_date)}` :
-                              'Date not available'}
+                            {plan.type}
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap">
-                            <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                              plan.status === 'APPROVED' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-                            }`}>
+                            <div className="text-sm">
+                              <div className="font-medium text-gray-900">{formatCurrency(planBudget)}</div>
+                              <div className="text-xs text-gray-500">
+                                {fundingCoverage.toFixed(1)}% funded
+                              </div>
+                              {budgetDetails.fundingGap > 0 && (
+                                <div className="text-xs text-red-600">
+                                  Gap: {formatCurrency(budgetDetails.fundingGap)}
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${getStatusColor(plan.status)}`}>
                               {plan.status}
                             </span>
                           </td>
@@ -1226,25 +1083,13 @@ const AdminDashboard: React.FC = () => {
                               formatDate(plan.reviews[plan.reviews.length - 1].reviewed_at) : 
                               formatDate(plan.updated_at)}
                           </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                            <div className="text-right">
-                              <div className="font-medium">
-                                {planBudget.totalBudget.toLocaleString()}
-                              </div>
-                              {planBudget.totalGap > 0 && (
-                                <div className="text-xs text-red-600">
-                                  Gap: {planBudget.totalGap.toLocaleString()}
-                                </div>
-                              )}
-                            </div>
-                          </td>
                           <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                             <button
                               onClick={() => handleViewPlan(plan)}
                               className="text-blue-600 hover:text-blue-900 flex items-center"
                             >
                               <Eye className="h-4 w-4 mr-1" />
-                              View
+                              View Details
                             </button>
                           </td>
                         </tr>
@@ -1258,6 +1103,384 @@ const AdminDashboard: React.FC = () => {
         </div>
       )}
 
+      {/* Analytics Tab */}
+      {activeTab === 'analytics' && (
+        <div className="space-y-6">
+          {/* Key Metrics Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+              <h3 className="text-lg font-medium text-gray-900 mb-4">Budget Analysis</h3>
+              <div className="space-y-3">
+                <div className="flex justify-between">
+                  <span className="text-sm text-gray-600">Total Required:</span>
+                  <span className="font-medium">{formatCurrency(stats.totalBudget)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-sm text-gray-600">Total Available:</span>
+                  <span className="font-medium text-green-600">{formatCurrency(stats.totalFunding)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-sm text-gray-600">Funding Gap:</span>
+                  <span className="font-medium text-red-600">{formatCurrency(stats.fundingGap)}</span>
+                </div>
+                <div className="pt-2 border-t border-gray-200">
+                  <div className="flex justify-between">
+                    <span className="text-sm font-medium text-gray-700">Coverage:</span>
+                    <span className="font-bold text-blue-600">
+                      {stats.totalBudget > 0 ? ((stats.totalFunding / stats.totalBudget) * 100).toFixed(1) : 0}%
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+              <h3 className="text-lg font-medium text-gray-900 mb-4">Plan Performance</h3>
+              <div className="space-y-3">
+                <div className="flex justify-between">
+                  <span className="text-sm text-gray-600">Approval Rate:</span>
+                  <span className="font-medium text-green-600">
+                    {stats.totalPlans > 0 ? ((stats.approvedPlans / stats.totalPlans) * 100).toFixed(1) : 0}%
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-sm text-gray-600">Rejection Rate:</span>
+                  <span className="font-medium text-red-600">
+                    {stats.totalPlans > 0 ? ((stats.rejectedPlans / stats.totalPlans) * 100).toFixed(1) : 0}%
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-sm text-gray-600">Pending Rate:</span>
+                  <span className="font-medium text-yellow-600">
+                    {stats.totalPlans > 0 ? ((stats.pendingPlans / stats.totalPlans) * 100).toFixed(1) : 0}%
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+              <h3 className="text-lg font-medium text-gray-900 mb-4">System Activity</h3>
+              <div className="space-y-3">
+                <div className="flex justify-between">
+                  <span className="text-sm text-gray-600">Active Organizations:</span>
+                  <span className="font-medium">{stats.organizationsWithPlans}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-sm text-gray-600">Avg Plan Value:</span>
+                  <span className="font-medium">{formatCurrency(stats.avgPlanValue)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-sm text-gray-600">Recent Submissions:</span>
+                  <span className="font-medium text-blue-600">{stats.recentSubmissions}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Detailed Charts */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+              <h3 className="text-lg font-medium text-gray-900 mb-4">Monthly Submission & Budget Trends</h3>
+              <div className="h-80">
+                <Line 
+                  data={getMonthlyTrends()} 
+                  options={{
+                    ...chartOptions,
+                    scales: {
+                      y: {
+                        type: 'linear',
+                        display: true,
+                        position: 'left',
+                        title: {
+                          display: true,
+                          text: 'Number of Plans'
+                        }
+                      },
+                      y1: {
+                        type: 'linear',
+                        display: true,
+                        position: 'right',
+                        title: {
+                          display: true,
+                          text: 'Budget (Thousands)'
+                        },
+                        grid: {
+                          drawOnChartArea: false,
+                        },
+                      },
+                    }
+                  }} 
+                />
+              </div>
+            </div>
+
+            <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+              <h3 className="text-lg font-medium text-gray-900 mb-4">Organization Performance</h3>
+              <div className="h-80">
+                <Bar data={getOrganizationPerformance()} options={chartOptions} />
+              </div>
+            </div>
+          </div>
+
+          {/* Budget Breakdown Table */}
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-200">
+              <h3 className="text-lg font-medium text-gray-900">Detailed Budget Breakdown</h3>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Funding Source
+                    </th>
+                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Amount
+                    </th>
+                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Percentage
+                    </th>
+                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Plans Count
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {[
+                    { name: 'Government Treasury', amount: calculateBudgetTotals(allPlans || []).governmentTotal, color: 'text-blue-600' },
+                    { name: 'Partners Funding', amount: calculateBudgetTotals(allPlans || []).partnersTotal, color: 'text-purple-600' },
+                    { name: 'SDG Funding', amount: calculateBudgetTotals(allPlans || []).sdgTotal, color: 'text-green-600' },
+                    { name: 'Other Funding', amount: calculateBudgetTotals(allPlans || []).otherTotal, color: 'text-orange-600' },
+                    { name: 'Funding Gap', amount: calculateBudgetTotals(allPlans || []).fundingGap, color: 'text-red-600' }
+                  ].map((item, index) => {
+                    const percentage = stats.totalBudget > 0 ? (item.amount / stats.totalBudget) * 100 : 0;
+                    const plansWithThisFunding = allPlans?.filter(plan => {
+                      const budgetDetails = calculateBudgetTotals([plan]);
+                      switch (item.name) {
+                        case 'Government Treasury': return budgetDetails.governmentTotal > 0;
+                        case 'Partners Funding': return budgetDetails.partnersTotal > 0;
+                        case 'SDG Funding': return budgetDetails.sdgTotal > 0;
+                        case 'Other Funding': return budgetDetails.otherTotal > 0;
+                        case 'Funding Gap': return budgetDetails.fundingGap > 0;
+                        default: return false;
+                      }
+                    }).length || 0;
+
+                    return (
+                      <tr key={index}>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                          {item.name}
+                        </td>
+                        <td className={`px-6 py-4 whitespace-nowrap text-sm text-right font-medium ${item.color}`}>
+                          {formatCurrency(item.amount)}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-right">
+                          {percentage.toFixed(1)}%
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-right">
+                          {plansWithThisFunding}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Organizations Tab */}
+      {activeTab === 'organizations' && (
+        <div className="space-y-6">
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-200">
+              <h3 className="text-lg font-medium text-gray-900">Organizations Overview</h3>
+            </div>
+            
+            {!allOrganizations || allOrganizations.length === 0 ? (
+              <div className="text-center py-12">
+                <Building2 className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+                <h3 className="text-lg font-medium text-gray-900 mb-1">No organizations</h3>
+                <p className="text-gray-500">No organizations have been created yet.</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Organization
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Type
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Parent
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Plans Count
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Total Budget
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Users
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Created
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {allOrganizations.map((org: any) => {
+                      const orgPlans = allPlans?.filter(p => p.organization === org.id) || [];
+                      const orgBudget = orgPlans.reduce((sum, plan) => sum + calculatePlanBudget(plan), 0);
+                      
+                      return (
+                        <tr key={org.id} className="hover:bg-gray-50">
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <div className="flex items-center">
+                              <Building2 className="h-5 w-5 text-gray-400 mr-2" />
+                              <span className="text-sm font-medium text-gray-900">{org.name}</span>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {org.type.replace('_', ' ')}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {org.parent_name || '-'}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            {orgPlans.length}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            {formatCurrency(orgBudget)}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {org.users?.length || 0}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {formatDate(org.created_at)}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Users Tab */}
+      {activeTab === 'users' && (
+        <div className="space-y-6">
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-200">
+              <h3 className="text-lg font-medium text-gray-900">System Users Overview</h3>
+            </div>
+            
+            <div className="p-6">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                <div className="text-center p-4 bg-blue-50 rounded-lg">
+                  <div className="text-2xl font-bold text-blue-600">
+                    {allOrganizations?.reduce((sum: number, org: any) => 
+                      sum + (org.users?.filter((u: any) => u.role === 'ADMIN').length || 0), 0) || 0}
+                  </div>
+                  <div className="text-sm text-gray-500">Admins</div>
+                </div>
+                <div className="text-center p-4 bg-green-50 rounded-lg">
+                  <div className="text-2xl font-bold text-green-600">
+                    {allOrganizations?.reduce((sum: number, org: any) => 
+                      sum + (org.users?.filter((u: any) => u.role === 'PLANNER').length || 0), 0) || 0}
+                  </div>
+                  <div className="text-sm text-gray-500">Planners</div>
+                </div>
+                <div className="text-center p-4 bg-purple-50 rounded-lg">
+                  <div className="text-2xl font-bold text-purple-600">
+                    {allOrganizations?.reduce((sum: number, org: any) => 
+                      sum + (org.users?.filter((u: any) => u.role === 'EVALUATOR').length || 0), 0) || 0}
+                  </div>
+                  <div className="text-sm text-gray-500">Evaluators</div>
+                </div>
+                <div className="text-center p-4 bg-gray-50 rounded-lg">
+                  <div className="text-2xl font-bold text-gray-600">
+                    {allOrganizations?.reduce((sum: number, org: any) => 
+                      sum + (org.users?.length || 0), 0) || 0}
+                  </div>
+                  <div className="text-sm text-gray-500">Total Users</div>
+                </div>
+              </div>
+
+              {/* Users by Organization Table */}
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Organization
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Admins
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Planners
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Evaluators
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Total Users
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Plans Created
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {allOrganizations?.map((org: any) => {
+                      const orgUsers = org.users || [];
+                      const adminCount = orgUsers.filter((u: any) => u.role === 'ADMIN').length;
+                      const plannerCount = orgUsers.filter((u: any) => u.role === 'PLANNER').length;
+                      const evaluatorCount = orgUsers.filter((u: any) => u.role === 'EVALUATOR').length;
+                      const orgPlansCount = allPlans?.filter(p => p.organization === org.id).length || 0;
+                      
+                      return (
+                        <tr key={org.id} className="hover:bg-gray-50">
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <div className="flex items-center">
+                              <Building2 className="h-5 w-5 text-gray-400 mr-2" />
+                              <span className="text-sm font-medium text-gray-900">{org.name}</span>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            {adminCount}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            {plannerCount}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            {evaluatorCount}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            {orgUsers.length}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            {orgPlansCount}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Review Modal */}
       {showReviewModal && selectedPlan && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
@@ -1266,15 +1489,58 @@ const AdminDashboard: React.FC = () => {
               Admin Review: {getOrganizationName(selectedPlan)}
             </h3>
             
-            <PlanReviewForm
-              plan={selectedPlan}
-              onSubmit={handleReviewSubmit}
-              onCancel={() => {
-                setShowReviewModal(false);
-                setSelectedPlan(null);
-              }}
-              isSubmitting={reviewMutation.isPending}
-            />
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Review Decision
+                </label>
+                <div className="grid grid-cols-2 gap-4">
+                  <button
+                    onClick={() => reviewPlanMutation.mutate({
+                      planId: selectedPlan.id,
+                      status: 'APPROVED',
+                      feedback: 'Approved by admin'
+                    })}
+                    disabled={reviewPlanMutation.isPending}
+                    className="flex items-center justify-center p-4 border-2 border-green-200 rounded-lg hover:border-green-500 text-green-600 disabled:opacity-50"
+                  >
+                    <CheckCircle className="h-5 w-5 mr-2" />
+                    <div>
+                      <p className="font-medium">Approve</p>
+                      <p className="text-sm">Accept the plan</p>
+                    </div>
+                  </button>
+
+                  <button
+                    onClick={() => reviewPlanMutation.mutate({
+                      planId: selectedPlan.id,
+                      status: 'REJECTED',
+                      feedback: 'Rejected by admin - requires revision'
+                    })}
+                    disabled={reviewPlanMutation.isPending}
+                    className="flex items-center justify-center p-4 border-2 border-red-200 rounded-lg hover:border-red-500 text-red-600 disabled:opacity-50"
+                  >
+                    <XCircle className="h-5 w-5 mr-2" />
+                    <div>
+                      <p className="font-medium">Reject</p>
+                      <p className="text-sm">Request changes</p>
+                    </div>
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex justify-end space-x-3">
+                <button
+                  onClick={() => {
+                    setShowReviewModal(false);
+                    setSelectedPlan(null);
+                  }}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
