@@ -46,6 +46,24 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
   // Determine the effective user organization ID
   const effectiveUserOrgId = userOrgId || planData?.organization || null;
 
+  // Auto-fetch data when component mounts or key props change
+  useEffect(() => {
+    console.log('PlanReviewTable: Auto-fetching data on mount/change');
+    console.log('Props received:', {
+      organizationName,
+      plannerName,
+      objectivesLength: objectives?.length || 0,
+      userOrgId,
+      effectiveUserOrgId
+    });
+    
+    // Process objectives immediately when they're available
+    if (objectives && objectives.length > 0 && effectiveUserOrgId) {
+      console.log('Processing objectives automatically...');
+      processObjectivesData();
+    }
+  }, [objectives, effectiveUserOrgId, organizationName, plannerName]);
+
   // Helper function to get selected months for a specific quarter
   const getMonthsForQuarter = (selectedMonths: string[] | null, selectedQuarters: string[] | null, quarter: 'Q1' | 'Q2' | 'Q3' | 'Q4'): string => {
     if (!selectedMonths && !selectedQuarters) {
@@ -91,13 +109,16 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
   }, []);
 
   // Process objectives when data changes
-  useEffect(() => {
+  const processObjectivesData = () => {
     if (!effectiveUserOrgId || !objectives?.length) {
+      console.log('Cannot process objectives: missing userOrgId or objectives');
       setProcessedObjectives([]);
       return;
     }
     
     try {
+      console.log(`Processing ${objectives.length} objectives for user org ${effectiveUserOrgId}`);
+      
       const filteredObjectives = objectives.map(objective => {
         if (!objective) return objective;
 
@@ -136,12 +157,13 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
         };
       });
 
+      console.log(`Successfully processed ${filteredObjectives.length} objectives`);
       setProcessedObjectives(filteredObjectives);
     } catch (error) {
       console.error('Error processing objectives:', error);
       setProcessedObjectives([]);
     }
-  }, [objectives, effectiveUserOrgId]);
+  };
 
   // Convert objectives to table rows format (same as what's displayed in the table)
   const convertObjectivesToTableRows = (objectives: StrategicObjective[]) => {
@@ -680,25 +702,21 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
         </h2>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
           <div>
-            <span className="text-gray-500">Organization:</span>
-            <div className="font-medium">{organizationName}</div>
+            <span className="text-gray-500">Planner Organization:</span>
+            <div className="font-medium">{organizationName || 'Not specified'}</div>
           </div>
           <div>
             <span className="text-gray-500">Planner:</span>
-            <div className="font-medium">{plannerName}</div>
+            <div className="font-medium">{plannerName || 'Not specified'}</div>
           </div>
           <div>
             <span className="text-gray-500">Plan Type:</span>
-            <div className="font-medium">{planType}</div>
+            <div className="font-medium">{planType || 'Not specified'}</div>
           </div>
           <div>
-            <span className="text-gray-500">From:</span>
-            <div className="font-medium">{formatDate(fromDate)}</div>
+            <span className="text-gray-500">Planning Period:</span>
+            <div className="font-medium">{formatDate(fromDate)} - {formatDate(toDate)}</div>
           </div>
-        </div>
-        <div className="mt-2">
-          <span className="text-gray-500">To:</span>
-          <span className="font-medium ml-2">{formatDate(toDate)}</span>
         </div>
       </div>
 
@@ -848,7 +866,9 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
                   </td>
                   <td className="px-4 py-3 whitespace-nowrap text-sm text-center font-medium text-gray-900">{row.annualTarget}</td>
                   <td className="px-4 py-3 text-sm text-gray-500 max-w-xs">
-                    <div className="truncate" title={row.implementor}>{row.implementor}</div>
+                    <div className="truncate" title={row.implementor || organizationName}>
+                      {row.implementor || organizationName || 'Ministry of Health'}
+                    </div>
                   </td>
                   <td className="px-4 py-3 whitespace-nowrap text-sm text-right text-gray-900">
                     {row.budgetRequired > 0 ? formatCurrency(row.budgetRequired) : '-'}
