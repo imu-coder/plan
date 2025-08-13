@@ -304,7 +304,7 @@ const AdminDashboard: React.FC = () => {
             objective.initiatives.forEach((initiative: any) => {
               if (initiative.main_activities && Array.isArray(initiative.main_activities)) {
                 initiative.main_activities.forEach((activity: any) => {
-                  // Count sub-activities by type
+                  // Calculate budget from sub-activities if they exist
                   if (activity.sub_activities && Array.isArray(activity.sub_activities)) {
                     activity.sub_activities.forEach((subActivity: any) => {
                       const activityType = subActivity.activity_type || 'Other';
