@@ -113,6 +113,7 @@ const PlanSummary: React.FC = () => {
   const [retryCount, setRetryCount] = useState(0);
   const [processedPlanData, setProcessedPlanData] = useState<Plan | null>(null);
   const [organizationsMap, setOrganizationsMap] = useState<Record<string, string>>({});
+  const [plannerOrganizationName, setPlannerOrganizationName] = useState<string>('');
 
   // Query hooks
   const { data: organizationsData } = useQuery({
@@ -260,6 +261,7 @@ const PlanSummary: React.FC = () => {
             const org = organizationsData.data.find((o: Organization) => String(o.id) === String(planData.organization));
             if (org) {
               setOrganizationName(org.name);
+              setPlannerOrganizationName(planData.organizationName);
               return;
             }
           }
@@ -267,6 +269,7 @@ const PlanSummary: React.FC = () => {
           setOrganizationName('Unknown Organization');
         } catch (e) {
           console.error('Error setting organization name:', e);
+                setPlannerOrganizationName(org.name);
           setOrganizationName('Unknown Organization');
         }
       }
@@ -545,9 +548,11 @@ const PlanSummary: React.FC = () => {
                 'Gap': gap || '-',
               });
 
+            setPlannerOrganizationName('Unknown Organization');
               objectiveAdded = true;
               initiativeAddedForObjective = true;
             });
+            setPlannerOrganizationName('Unknown Organization');
           }
         });
       }
@@ -749,6 +754,18 @@ const PlanSummary: React.FC = () => {
         <div className="flex justify-between items-center mb-6">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Plan Details</h1>
+            <div className="flex items-center mt-2 space-x-4">
+              <div className="flex items-center">
+                <Building2 className="h-4 w-4 text-gray-500 mr-1" />
+                <span className="text-sm text-gray-600">Organization: </span>
+                <span className="text-sm font-medium text-gray-900">{plannerOrganizationName}</span>
+              </div>
+              <div className="flex items-center">
+                <User className="h-4 w-4 text-gray-500 mr-1" />
+                <span className="text-sm text-gray-600">Planner: </span>
+                <span className="text-sm font-medium text-gray-900">{processedPlanData.planner_name || 'N/A'}</span>
+              </div>
+            </div>
             <div className="flex items-center mt-1">
               <div
                 className={`px-2 py-1 text-xs rounded ${
@@ -802,6 +819,68 @@ const PlanSummary: React.FC = () => {
           </div>
         </div>
 
+        {/* Evaluator Feedback Section - Moved to top */}
+        {processedPlanData.reviews?.length > 0 && (
+          <div className="mb-8 bg-white border border-gray-200 rounded-lg overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
+              <h2 className="text-lg font-medium text-gray-900 flex items-center">
+                <ClipboardCheck className="h-5 w-5 mr-2 text-blue-600" />
+                Evaluator Feedback
+              </h2>
+            </div>
+            <div className="p-6">
+              <div
+                className={`p-4 rounded-lg ${
+                  processedPlanData.status === 'APPROVED'
+                    ? 'bg-green-50 border border-green-200'
+                    : processedPlanData.status === 'REJECTED'
+                    ? 'bg-red-50 border border-red-200'
+                    : 'bg-gray-50 border border-gray-200'
+                }`}
+              >
+                <div className="flex items-start">
+                  {processedPlanData.status === 'APPROVED' ? (
+                    <CheckCircle className="h-5 w-5 mr-2 text-green-500 mt-0.5" />
+                  ) : processedPlanData.status === 'REJECTED' ? (
+                    <XCircle className="h-5 w-5 mr-2 text-red-500 mt-0.5" />
+                  ) : (
+                    <div className="h-5 w-5 mr-2" />
+                  )}
+                  <div className="flex-1">
+                    <p
+                      className={`font-medium text-lg ${
+                        processedPlanData.status === 'APPROVED'
+                          ? 'text-green-700'
+                          : processedPlanData.status === 'REJECTED'
+                          ? 'text-red-700'
+                          : 'text-gray-700'
+                      }`}
+                    >
+                      {processedPlanData.status === 'APPROVED'
+                        ? 'Plan Approved'
+                        : processedPlanData.status === 'REJECTED'
+                        ? 'Plan Rejected'
+                        : 'Pending Review'}
+                    </p>
+                    {processedPlanData.reviews[0]?.feedback && (
+                      <div className="mt-3 p-3 bg-white rounded border border-gray-200">
+                        <p className="text-sm font-medium text-gray-700 mb-1">Feedback:</p>
+                        <p className="text-gray-900">{processedPlanData.reviews[0].feedback}</p>
+                      </div>
+                    )}
+                    {processedPlanData.reviews[0]?.reviewed_at && (
+                      <p className="mt-3 text-sm text-gray-500 flex items-center">
+                        <Calendar className="h-4 w-4 mr-1" />
+                        Reviewed on {formatDate(processedPlanData.reviews[0].reviewed_at)} by{' '}
+                        {processedPlanData.reviews[0].evaluator_name || 'Evaluator'}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
         {processedPlanData.objectives?.length > 0 && (
           <div className="mb-8">
             <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
@@ -816,7 +895,7 @@ const PlanSummary: React.FC = () => {
                   objectives={processedPlanData.objectives || []}
                   onSubmit={async () => {}}
                   isSubmitting={false}
-                  organizationName={organizationName}
+                  organizationName={plannerOrganizationName}
                   plannerName={processedPlanData.planner_name || 'N/A'}
                   fromDate={processedPlanData.from_date || ''}
                   toDate={processedPlanData.to_date || ''}
@@ -838,7 +917,7 @@ const PlanSummary: React.FC = () => {
                 <Building2 className="h-5 w-5 text-gray-400 mt-0.5 mr-2" />
                 <div>
                   <p className="text-sm text-gray-500">Organization Name</p>
-                  <p className="font-medium">{organizationName}</p>
+                  <p className="font-medium">{plannerOrganizationName}</p>
                 </div>
               </div>
               <div className="flex items-start">
@@ -867,56 +946,6 @@ const PlanSummary: React.FC = () => {
             </div>
           </div>
 
-          {processedPlanData.reviews?.length > 0 && (
-            <div className="border-b border-gray-200 pb-6">
-              <h2 className="text-lg font-medium text-gray-900 mb-4">Evaluator Feedback</h2>
-              <div
-                className={`p-4 rounded-lg ${
-                  processedPlanData.status === 'APPROVED'
-                    ? 'bg-green-50 border border-green-200'
-                    : processedPlanData.status === 'REJECTED'
-                    ? 'bg-red-50 border border-red-200'
-                    : 'bg-gray-50 border border-gray-200'
-                }`}
-              >
-                <div className="flex items-start">
-                  {processedPlanData.status === 'APPROVED' ? (
-                    <CheckCircle className="h-5 w-5 mr-2 text-green-500 mt-0.5" />
-                  ) : processedPlanData.status === 'REJECTED' ? (
-                    <XCircle className="h-5 w-5 mr-2 text-red-500 mt-0.5" />
-                  ) : (
-                    <div className="h-5 w-5 mr-2" />
-                  )}
-                  <div>
-                    <p
-                      className={`font-medium ${
-                        processedPlanData.status === 'APPROVED'
-                          ? 'text-green-700'
-                          : processedPlanData.status === 'REJECTED'
-                          ? 'text-red-700'
-                          : 'text-gray-700'
-                      }`}
-                    >
-                      {processedPlanData.status === 'APPROVED'
-                        ? 'Plan Approved'
-                        : processedPlanData.status === 'REJECTED'
-                        ? 'Plan Rejected'
-                        : 'Pending Review'}
-                    </p>
-                    {processedPlanData.reviews[0]?.feedback && (
-                      <p className="mt-1 text-gray-600">{processedPlanData.reviews[0].feedback}</p>
-                    )}
-                    {processedPlanData.reviews[0]?.reviewed_at && (
-                      <p className="mt-2 text-sm text-gray-500">
-                        Reviewed on {formatDate(processedPlanData.reviews[0].reviewed_at)} by{' '}
-                        {processedPlanData.reviews[0].evaluator_name || 'Evaluator'}
-                      </p>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
 
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
             <div className="bg-white p-4 rounded-lg border border-gray-200">
@@ -961,7 +990,7 @@ const PlanSummary: React.FC = () => {
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-lg p-6 max-w-md w-full">
             <h3 className="text-lg font-medium text-gray-900 mb-4">
-              Review Plan: {organizationName}
+              Review Plan: {plannerOrganizationName}
             </h3>
 
             <PlanReviewForm

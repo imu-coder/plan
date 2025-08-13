@@ -676,9 +676,13 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
       <div className="bg-gradient-to-r from-green-50 to-blue-50 p-6 rounded-lg border border-gray-200">
         <h2 className="text-xl font-bold text-gray-900 mb-4 flex items-center">
           <Building2 className="h-6 w-6 mr-2 text-green-600" />
-          {organizationName} - Strategic Plan
+          Strategic Plan
         </h2>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+          <div>
+            <span className="text-gray-500">Organization:</span>
+            <div className="font-medium">{organizationName}</div>
+          </div>
           <div>
             <span className="text-gray-500">Planner:</span>
             <div className="font-medium">{plannerName}</div>
@@ -691,10 +695,10 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
             <span className="text-gray-500">From:</span>
             <div className="font-medium">{formatDate(fromDate)}</div>
           </div>
-          <div>
-            <span className="text-gray-500">To:</span>
-            <div className="font-medium">{formatDate(toDate)}</div>
-          </div>
+        </div>
+        <div className="mt-2">
+          <span className="text-gray-500">To:</span>
+          <span className="font-medium ml-2">{formatDate(toDate)}</span>
         </div>
       </div>
 
