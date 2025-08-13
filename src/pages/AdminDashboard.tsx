@@ -2,15 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { 
-  Shield, BarChart3, PieChart, TrendingUp, Users, Building2, 
-  CheckCircle, XCircle, Clock, AlertCircle, Loader, RefreshCw, 
-  DollarSign, Activity, FileText, Calendar, Eye, Filter,
-  ChevronLeft, ChevronRight, Search, ArrowUpDown, ArrowUp, ArrowDown
+  Shield, Users, CheckCircle, XCircle, AlertCircle, Loader, RefreshCw, 
+  Building2, DollarSign, TrendingUp, BarChart3, PieChart, Calendar,
+  Eye, ClipboardCheck, Search, ChevronLeft, ChevronRight, Filter,
+  Activity, Briefcase, GraduationCap, MessageSquare, Wrench, FileText, Package
 } from 'lucide-react';
 import { useLanguage } from '../lib/i18n/LanguageContext';
 import { plans, organizations, auth, api } from '../lib/api';
 import { format } from 'date-fns';
-import PlanReviewForm from '../components/PlanReviewForm';
 import { isAdmin } from '../types/user';
 import { Bar, Doughnut, Line } from 'react-chartjs-2';
 import { 
@@ -45,30 +44,22 @@ const AdminDashboard: React.FC = () => {
   const { t } = useLanguage();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  
-  // State management
-  const [selectedPlan, setSelectedPlan] = useState<any>(null);
-  const [showReviewModal, setShowReviewModal] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
-  const [isRefreshing, setIsRefreshing] = useState(false);
   const [organizationsMap, setOrganizationsMap] = useState<Record<string, string>>({});
   const [activeTab, setActiveTab] = useState<'overview' | 'reviewed' | 'budget-activity' | 'analytics' | 'executive-performance'>('overview');
   const [reviewedFilter, setReviewedFilter] = useState('all');
   const [reviewedOrgFilter, setReviewedOrgFilter] = useState('all');
-  
-  // Filtering and pagination state
-  const [statusFilter, setStatusFilter] = useState<string>('all');
-  const [organizationFilter, setOrganizationFilter] = useState<string>('all');
-  const [searchTerm, setSearchTerm] = useState<string>('');
-  const [sortField, setSortField] = useState<string>('submitted_at');
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
-  const [currentPage, setCurrentPage] = useState(1);
-  const [budgetActivityPage, setBudgetActivityPage] = useState(1);
-  const [executivePage, setExecutivePage] = useState(1);
-  const itemsPerPage = 10;
+  const [reviewedSearch, setReviewedSearch] = useState('');
+  const [reviewedSortBy, setReviewedSortBy] = useState<'date' | 'organization' | 'status'>('date');
+  const [reviewedSortOrder, setReviewedSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [reviewedCurrentPage, setReviewedCurrentPage] = useState(1);
+  const [budgetActivityCurrentPage, setBudgetActivityCurrentPage] = useState(1);
+  const [executiveCurrentPage, setExecutiveCurrentPage] = useState(1);
+  const reviewedItemsPerPage = 10;
+  const budgetActivityItemsPerPage = 10;
+  const executiveItemsPerPage = 10;
 
-  // Check admin permissions
+  // Check if user has admin permissions
   useEffect(() => {
     const checkPermissions = async () => {
       try {
@@ -90,9 +81,9 @@ const AdminDashboard: React.FC = () => {
     checkPermissions();
   }, [navigate]);
 
-  // Fetch organizations data
+  // Fetch all organizations to map IDs to names
   const { data: organizationsData } = useQuery({
-    queryKey: ['organizations'],
+    queryKey: ['organizations', 'admin'],
     queryFn: async () => {
       try {
         const response = await organizations.getAll();
@@ -118,13 +109,13 @@ const AdminDashboard: React.FC = () => {
     }
   }, [organizationsData]);
 
-  // Fetch all plans data
-  const { data: allPlansData, isLoading, refetch } = useQuery({
+  // Fetch all plans for admin overview
+  const { data: allPlans, isLoading, refetch } = useQuery({
     queryKey: ['plans', 'admin-all'],
     queryFn: async () => {
       try {
-        const response = await plans.getAll();
-        const plansData = response?.data || [];
+        const response = await api.get('/plans/');
+        const plansData = response.data?.results || response.data || [];
         
         // Map organization names
         if (Array.isArray(plansData)) {
@@ -138,37 +129,6 @@ const AdminDashboard: React.FC = () => {
         return { data: plansData };
       } catch (error) {
         console.error('Error fetching all plans:', error);
-        throw error;
-      }
-    },
-    enabled: Object.keys(organizationsMap).length > 0,
-    retry: 2,
-    refetchInterval: 30000,
-  });
-
-  // Fetch reviewed plans
-  const { data: reviewedPlans } = useQuery({
-    queryKey: ['plans', 'reviewed-admin'],
-    queryFn: async () => {
-      try {
-        const response = await api.get('/plans/', {
-          params: { status: 'APPROVED,REJECTED' }
-        });
-        
-        const plans = response.data?.results || response.data || [];
-        
-        // Map organization names
-        if (Array.isArray(plans)) {
-          plans.forEach((plan: any) => {
-            if (plan.organization && organizationsMap[plan.organization]) {
-              plan.organizationName = organizationsMap[plan.organization];
-            }
-          });
-        }
-        
-        return { data: plans };
-      } catch (error) {
-        console.error('Error fetching reviewed plans:', error);
         return { data: [] };
       }
     },
@@ -176,215 +136,157 @@ const AdminDashboard: React.FC = () => {
     retry: 2
   });
 
-  // Calculate summary statistics
-  const allPlansData = reviewedPlans?.data || [];
-  
-  const totalPlans = allPlansData.filter(plan => 
-    ['SUBMITTED', 'APPROVED'].includes(plan.status)
-  ).length;
-  const pendingCount = allPlansData.filter(plan => plan.status === 'SUBMITTED').length;
-  const approvedCount = allPlansData.filter(plan => plan.status === 'APPROVED').length;
-  const rejectedCount = allPlansData.filter(plan => plan.status === 'REJECTED').length;
-
-  // Calculate budget totals using SubActivity model
-  const calculateBudgetTotals = (plansData: any[]) => {
-    let totalBudget = 0;
-    let totalGovernment = 0;
-    let totalSDG = 0;
-    let totalPartners = 0;
-    let totalOther = 0;
-    let activityTypeBudgets: Record<string, { count: number; budget: number }> = {
-      'Training': { count: 0, budget: 0 },
-      'Meeting': { count: 0, budget: 0 },
-      'Workshop': { count: 0, budget: 0 },
-      'Supervision': { count: 0, budget: 0 },
-      'Procurement': { count: 0, budget: 0 },
-      'Printing': { count: 0, budget: 0 },
-      'Other': { count: 0, budget: 0 }
-    };
-
-    plansData.forEach((plan: any) => {
-      if (!plan.objectives) return;
-
-      plan.objectives.forEach((objective: any) => {
-        objective.initiatives?.forEach((initiative: any) => {
-          initiative.main_activities?.forEach((activity: any) => {
-            // Calculate budget from sub-activities (new model)
-            if (activity.sub_activities && activity.sub_activities.length > 0) {
-              activity.sub_activities.forEach((subActivity: any) => {
-                const subCost = subActivity.budget_calculation_type === 'WITH_TOOL'
-                  ? Number(subActivity.estimated_cost_with_tool || 0)
-                  : Number(subActivity.estimated_cost_without_tool || 0);
-                
-                const subGov = Number(subActivity.government_treasury || 0);
-                const subPartners = Number(subActivity.partners_funding || 0);
-                const subSdg = Number(subActivity.sdg_funding || 0);
-                const subOther = Number(subActivity.other_funding || 0);
-                
-                totalBudget += subCost;
-                totalGovernment += subGov;
-                totalPartners += subPartners;
-                totalSDG += subSdg;
-                totalOther += subOther;
-
-                // Count by activity type
-                const activityType = subActivity.activity_type || 'Other';
-                if (activityTypeBudgets[activityType]) {
-                  activityTypeBudgets[activityType].count += 1;
-                  activityTypeBudgets[activityType].budget += subCost;
-                }
-              });
-            } else if (activity.budget) {
-              // Fallback to legacy budget
-              const cost = activity.budget.budget_calculation_type === 'WITH_TOOL'
-                ? Number(activity.budget.estimated_cost_with_tool || 0)
-                : Number(activity.budget.estimated_cost_without_tool || 0);
-              
-              totalBudget += cost;
-              totalGovernment += Number(activity.budget.government_treasury || 0);
-              totalPartners += Number(activity.budget.partners_funding || 0);
-              totalSDG += Number(activity.budget.sdg_funding || 0);
-              totalOther += Number(activity.budget.other_funding || 0);
-
-              // Count by activity type
-              const activityType = activity.budget.activity_type || 'Other';
-              if (activityTypeBudgets[activityType]) {
-                activityTypeBudgets[activityType].count += 1;
-                activityTypeBudgets[activityType].budget += cost;
-              }
-            }
-          });
-        });
-      });
-    });
-
-    const totalAvailable = totalGovernment + totalSDG + totalPartners + totalOther;
-    const fundingGap = Math.max(0, totalBudget - totalAvailable);
-
-    return {
-      totalBudget,
-      totalAvailable,
-      fundingGap,
-      totalGovernment,
-      totalSDG,
-      totalPartners,
-      totalOther,
-      activityTypeBudgets
-    };
-  };
-
-  // Get organization name with multiple fallbacks
+  // Helper function to get organization name
   const getOrganizationName = (plan: any) => {
     if (plan.organizationName) return plan.organizationName;
     if (plan.organization_name) return plan.organization_name;
-    if (plan.organization && organizationsMap[String(plan.organization)]) {
-      return organizationsMap[String(plan.organization)];
+    if (plan.organization && organizationsMap[plan.organization]) {
+      return organizationsMap[plan.organization];
     }
     return 'Unknown Organization';
   };
 
-  // Calculate plan budget helper
+  // Helper function to calculate plan budget using SubActivity model
   const calculatePlanBudget = (plan: any) => {
     let total = 0;
-    let available = 0;
-    
-    if (plan.objectives) {
-      plan.objectives.forEach((objective: any) => {
-        objective.initiatives?.forEach((initiative: any) => {
-          initiative.main_activities?.forEach((activity: any) => {
-            if (activity.sub_activities && activity.sub_activities.length > 0) {
-              activity.sub_activities.forEach((subActivity: any) => {
-                const cost = subActivity.budget_calculation_type === 'WITH_TOOL'
-                  ? Number(subActivity.estimated_cost_with_tool || 0)
-                  : Number(subActivity.estimated_cost_without_tool || 0);
-                
-                const funding = Number(subActivity.government_treasury || 0) +
-                               Number(subActivity.partners_funding || 0) +
-                               Number(subActivity.sdg_funding || 0) +
-                               Number(subActivity.other_funding || 0);
-                
-                total += cost;
-                available += funding;
-              });
-            } else if (activity.budget) {
-              const cost = activity.budget.budget_calculation_type === 'WITH_TOOL'
-                ? Number(activity.budget.estimated_cost_with_tool || 0)
-                : Number(activity.budget.estimated_cost_without_tool || 0);
-              
-              const funding = Number(activity.budget.government_treasury || 0) +
-                             Number(activity.budget.partners_funding || 0) +
-                             Number(activity.budget.sdg_funding || 0) +
-                             Number(activity.budget.other_funding || 0);
-              
-              total += cost;
-              available += funding;
-            }
-          });
-        });
-      });
-    }
-    
-    return {
-      total,
-      available,
-      gap: Math.max(0, total - available)
-    };
-  };
+    let government = 0;
+    let partners = 0;
+    let sdg = 0;
+    let other = 0;
 
-  // Calculate budget data for charts
-  const calculateBudgetData = () => {
-    const allPlans = allPlansData;
-    let totalBudget = 0;
-    let totalGovernment = 0;
-    let totalSDG = 0;
-    let totalPartners = 0;
-    let totalOther = 0;
-
-    allPlans.forEach((plan: any) => {
-      const budget = calculatePlanBudget(plan);
-      totalBudget += budget.total;
-      
-      // Calculate funding sources
-      if (plan.objectives) {
+    try {
+      if (plan.objectives && Array.isArray(plan.objectives)) {
         plan.objectives.forEach((objective: any) => {
-          objective.initiatives?.forEach((initiative: any) => {
-            initiative.main_activities?.forEach((activity: any) => {
-              if (activity.sub_activities && activity.sub_activities.length > 0) {
-                activity.sub_activities.forEach((subActivity: any) => {
-                  totalGovernment += Number(subActivity.government_treasury || 0);
-                  totalSDG += Number(subActivity.sdg_funding || 0);
-                  totalPartners += Number(subActivity.partners_funding || 0);
-                  totalOther += Number(subActivity.other_funding || 0);
+          if (objective.initiatives && Array.isArray(objective.initiatives)) {
+            objective.initiatives.forEach((initiative: any) => {
+              if (initiative.main_activities && Array.isArray(initiative.main_activities)) {
+                initiative.main_activities.forEach((activity: any) => {
+                  // Calculate budget from sub-activities if they exist
+                  if (activity.sub_activities && Array.isArray(activity.sub_activities)) {
+                    activity.sub_activities.forEach((subActivity: any) => {
+                      const subCost = subActivity.budget_calculation_type === 'WITH_TOOL'
+                        ? Number(subActivity.estimated_cost_with_tool || 0)
+                        : Number(subActivity.estimated_cost_without_tool || 0);
+                      
+                      total += subCost;
+                      government += Number(subActivity.government_treasury || 0);
+                      partners += Number(subActivity.partners_funding || 0);
+                      sdg += Number(subActivity.sdg_funding || 0);
+                      other += Number(subActivity.other_funding || 0);
+                    });
+                  } else if (activity.budget) {
+                    // Fallback to legacy budget
+                    const cost = activity.budget.budget_calculation_type === 'WITH_TOOL'
+                      ? Number(activity.budget.estimated_cost_with_tool || 0)
+                      : Number(activity.budget.estimated_cost_without_tool || 0);
+                    
+                    total += cost;
+                    government += Number(activity.budget.government_treasury || 0);
+                    partners += Number(activity.budget.partners_funding || 0);
+                    sdg += Number(activity.budget.sdg_funding || 0);
+                    other += Number(activity.budget.other_funding || 0);
+                  }
                 });
-              } else if (activity.budget) {
-                totalGovernment += Number(activity.budget.government_treasury || 0);
-                totalSDG += Number(activity.budget.sdg_funding || 0);
-                totalPartners += Number(activity.budget.partners_funding || 0);
-                totalOther += Number(activity.budget.other_funding || 0);
               }
             });
-          });
+          }
         });
       }
+    } catch (error) {
+      console.error('Error calculating plan budget:', error);
+    }
+
+    const totalFunding = government + partners + sdg + other;
+    const gap = Math.max(0, total - totalFunding);
+
+    return { total, government, partners, sdg, other, totalFunding, gap };
+  };
+
+  // Calculate summary statistics
+  const reviewedPlansData = allPlans?.data || [];
+  
+  const totalPlans = reviewedPlansData.filter(plan => 
+    ['SUBMITTED', 'APPROVED'].includes(plan.status)
+  ).length;
+  const pendingCount = reviewedPlansData.filter(plan => plan.status === 'SUBMITTED').length;
+  const approvedCount = reviewedPlansData.filter(plan => plan.status === 'APPROVED').length;
+  const rejectedCount = reviewedPlansData.filter(plan => plan.status === 'REJECTED').length;
+
+  // Calculate budget totals using SubActivity model
+  const calculateBudgetTotals = () => {
+    const submittedAndApprovedPlans = reviewedPlansData.filter(plan => 
+      ['SUBMITTED', 'APPROVED'].includes(plan.status)
+    );
+    
+    let totalBudget = 0;
+    let totalFunding = 0;
+    let governmentTotal = 0;
+    let partnersTotal = 0;
+    let sdgTotal = 0;
+    let otherTotal = 0;
+
+    submittedAndApprovedPlans.forEach((plan: any) => {
+      const budget = calculatePlanBudget(plan);
+      totalBudget += budget.total;
+      totalFunding += budget.totalFunding;
+      governmentTotal += budget.government;
+      partnersTotal += budget.partners;
+      sdgTotal += budget.sdg;
+      otherTotal += budget.other;
     });
 
-    const totalAvailable = totalGovernment + totalSDG + totalPartners + totalOther;
-    const fundingGap = Math.max(0, totalBudget - totalAvailable);
+    const fundingGap = Math.max(0, totalBudget - totalFunding);
 
     return {
       totalBudget,
-      totalAvailable,
+      totalFunding,
       fundingGap,
+      governmentTotal,
+      partnersTotal,
+      sdgTotal,
+      otherTotal
+    };
+  };
+
+  const budgetTotals = calculateBudgetTotals();
+
+  // Calculate budget data for charts
+  const calculateBudgetData = () => {
+    const submittedAndApprovedPlans = reviewedPlansData.filter(plan => 
+      ['SUBMITTED', 'APPROVED'].includes(plan.status)
+    );
+    
+    let totalBudget = 0;
+    let totalGovernment = 0;
+    let totalPartners = 0;
+    let totalSdg = 0;
+    let totalOther = 0;
+
+    submittedAndApprovedPlans.forEach((plan: any) => {
+      const budget = calculatePlanBudget(plan);
+      totalBudget += budget.total;
+      totalGovernment += budget.government;
+      totalPartners += budget.partners;
+      totalSdg += budget.sdg;
+      totalOther += budget.other;
+    });
+
+    return {
+      totalBudget,
       totalGovernment,
-      totalSDG,
       totalPartners,
-      totalOther
+      totalSdg,
+      totalOther,
+      fundingGap: Math.max(0, totalBudget - (totalGovernment + totalPartners + totalSdg + totalOther))
     };
   };
 
   // Calculate activity type budgets
   const calculateActivityTypeBudgets = () => {
-    const allPlans = allPlansData;
+    const submittedAndApprovedPlans = reviewedPlansData.filter(plan => 
+      ['SUBMITTED', 'APPROVED'].includes(plan.status)
+    );
+    
     const activityBudgets = {
       Training: { count: 0, budget: 0 },
       Meeting: { count: 0, budget: 0 },
@@ -395,36 +297,44 @@ const AdminDashboard: React.FC = () => {
       Other: { count: 0, budget: 0 }
     };
 
-    allPlans.forEach((plan: any) => {
-      if (plan.objectives) {
+    submittedAndApprovedPlans.forEach((plan: any) => {
+      if (plan.objectives && Array.isArray(plan.objectives)) {
         plan.objectives.forEach((objective: any) => {
-          objective.initiatives?.forEach((initiative: any) => {
-            initiative.main_activities?.forEach((activity: any) => {
-              if (activity.sub_activities && activity.sub_activities.length > 0) {
-                activity.sub_activities.forEach((subActivity: any) => {
-                  const activityType = subActivity.activity_type || 'Other';
-                  const cost = subActivity.budget_calculation_type === 'WITH_TOOL'
-                    ? Number(subActivity.estimated_cost_with_tool || 0)
-                    : Number(subActivity.estimated_cost_without_tool || 0);
-                  
-                  if (activityBudgets[activityType as keyof typeof activityBudgets]) {
-                    activityBudgets[activityType as keyof typeof activityBudgets].count += 1;
-                    activityBudgets[activityType as keyof typeof activityBudgets].budget += cost;
+          if (objective.initiatives && Array.isArray(objective.initiatives)) {
+            objective.initiatives.forEach((initiative: any) => {
+              if (initiative.main_activities && Array.isArray(initiative.main_activities)) {
+                initiative.main_activities.forEach((activity: any) => {
+                  // Count sub-activities by type
+                  if (activity.sub_activities && Array.isArray(activity.sub_activities)) {
+                    activity.sub_activities.forEach((subActivity: any) => {
+                      const activityType = subActivity.activity_type || 'Other';
+                      if (activityBudgets[activityType]) {
+                        activityBudgets[activityType].count++;
+                        
+                        const subCost = subActivity.budget_calculation_type === 'WITH_TOOL'
+                          ? Number(subActivity.estimated_cost_with_tool || 0)
+                          : Number(subActivity.estimated_cost_without_tool || 0);
+                        
+                        activityBudgets[activityType].budget += subCost;
+                      }
+                    });
+                  } else if (activity.budget && activity.budget.activity_type) {
+                    // Fallback to legacy budget
+                    const activityType = activity.budget.activity_type || 'Other';
+                    if (activityBudgets[activityType]) {
+                      activityBudgets[activityType].count++;
+                      
+                      const cost = activity.budget.budget_calculation_type === 'WITH_TOOL'
+                        ? Number(activity.budget.estimated_cost_with_tool || 0)
+                        : Number(activity.budget.estimated_cost_without_tool || 0);
+                      
+                      activityBudgets[activityType].budget += cost;
+                    }
                   }
                 });
-              } else if (activity.budget) {
-                const activityType = activity.budget.activity_type || 'Other';
-                const cost = activity.budget.budget_calculation_type === 'WITH_TOOL'
-                  ? Number(activity.budget.estimated_cost_with_tool || 0)
-                  : Number(activity.budget.estimated_cost_without_tool || 0);
-                
-                if (activityBudgets[activityType as keyof typeof activityBudgets]) {
-                  activityBudgets[activityType as keyof typeof activityBudgets].count += 1;
-                  activityBudgets[activityType as keyof typeof activityBudgets].budget += cost;
-                }
               }
             });
-          });
+          }
         });
       }
     });
@@ -434,35 +344,45 @@ const AdminDashboard: React.FC = () => {
 
   // Calculate monthly trends
   const calculateMonthlyTrends = () => {
-    const allPlans = allPlansData;
+    const submittedAndApprovedPlans = reviewedPlansData.filter(plan => 
+      ['SUBMITTED', 'APPROVED'].includes(plan.status)
+    );
+    
     const monthlyData: Record<string, { submissions: number; budget: number }> = {};
 
-    // Initialize months
-    for (let i = 0; i < 12; i++) {
-      const monthName = new Date(2024, i, 1).toLocaleString('default', { month: 'short' });
-      monthlyData[monthName] = { submissions: 0, budget: 0 };
-    }
-
-    allPlans.forEach((plan: any) => {
+    submittedAndApprovedPlans.forEach((plan: any) => {
       if (plan.submitted_at) {
-        const month = new Date(plan.submitted_at).toLocaleString('default', { month: 'short' });
-        if (monthlyData[month]) {
-          monthlyData[month].submissions += 1;
-          const budget = calculatePlanBudget(plan);
-          monthlyData[month].budget += budget.total;
+        const month = format(new Date(plan.submitted_at), 'MMM yyyy');
+        if (!monthlyData[month]) {
+          monthlyData[month] = { submissions: 0, budget: 0 };
         }
+        monthlyData[month].submissions++;
+        
+        const budget = calculatePlanBudget(plan);
+        monthlyData[month].budget += budget.total;
       }
     });
 
-    return monthlyData;
+    const sortedMonths = Object.keys(monthlyData).sort((a, b) => 
+      new Date(a).getTime() - new Date(b).getTime()
+    );
+
+    return {
+      labels: sortedMonths,
+      submissions: sortedMonths.map(month => monthlyData[month].submissions),
+      budgets: sortedMonths.map(month => monthlyData[month].budget)
+    };
   };
 
   // Calculate organization performance for charts
   const calculateOrgPerformance = () => {
-    const allPlans = allPlansData;
+    const submittedAndApprovedPlans = reviewedPlansData.filter(plan => 
+      ['SUBMITTED', 'APPROVED'].includes(plan.status)
+    );
+    
     const orgData: Record<string, { plans: number; budget: number; name: string }> = {};
 
-    allPlans.forEach((plan: any) => {
+    submittedAndApprovedPlans.forEach((plan: any) => {
       const orgId = plan.organization;
       const orgName = getOrganizationName(plan);
       
@@ -470,111 +390,99 @@ const AdminDashboard: React.FC = () => {
         orgData[orgId] = { plans: 0, budget: 0, name: orgName };
       }
       
-      orgData[orgId].plans += 1;
+      orgData[orgId].plans++;
       const budget = calculatePlanBudget(plan);
       orgData[orgId].budget += budget.total;
     });
 
-    return Object.values(orgData).slice(0, 10); // Top 10 organizations
+    const sortedOrgs = Object.values(orgData)
+      .sort((a, b) => b.plans - a.plans)
+      .slice(0, 10);
+
+    return {
+      labels: sortedOrgs.map(org => org.name),
+      plans: sortedOrgs.map(org => org.plans),
+      budgets: sortedOrgs.map(org => org.budget)
+    };
   };
 
   // Calculate budget by activity type for table
   const calculateBudgetByActivityTable = () => {
-    const allPlans = allPlansData;
+    const submittedAndApprovedPlans = reviewedPlansData.filter(plan => 
+      ['SUBMITTED', 'APPROVED'].includes(plan.status)
+    );
+    
     const orgActivityData: Record<string, {
       organizationName: string;
-      training: number;
-      meeting: number;
-      workshop: number;
-      procurement: number;
-      printing: number;
-      other: number;
+      Training: { count: number; budget: number };
+      Meeting: { count: number; budget: number };
+      Workshop: { count: number; budget: number };
+      Procurement: { count: number; budget: number };
+      Printing: { count: number; budget: number };
+      Other: { count: number; budget: number };
       totalCount: number;
       totalBudget: number;
     }> = {};
 
-    allPlans.forEach((plan: any) => {
+    submittedAndApprovedPlans.forEach((plan: any) => {
+      const orgId = plan.organization;
       const orgName = getOrganizationName(plan);
       
-      if (!orgActivityData[orgName]) {
-        orgActivityData[orgName] = {
+      if (!orgActivityData[orgId]) {
+        orgActivityData[orgId] = {
           organizationName: orgName,
-          training: 0,
-          meeting: 0,
-          workshop: 0,
-          procurement: 0,
-          printing: 0,
-          other: 0,
+          Training: { count: 0, budget: 0 },
+          Meeting: { count: 0, budget: 0 },
+          Workshop: { count: 0, budget: 0 },
+          Procurement: { count: 0, budget: 0 },
+          Printing: { count: 0, budget: 0 },
+          Other: { count: 0, budget: 0 },
           totalCount: 0,
           totalBudget: 0
         };
       }
 
-      if (plan.objectives) {
+      if (plan.objectives && Array.isArray(plan.objectives)) {
         plan.objectives.forEach((objective: any) => {
-          objective.initiatives?.forEach((initiative: any) => {
-            initiative.main_activities?.forEach((activity: any) => {
-              if (activity.sub_activities && activity.sub_activities.length > 0) {
-                activity.sub_activities.forEach((subActivity: any) => {
-                  const activityType = (subActivity.activity_type || 'Other').toLowerCase();
-                  const cost = subActivity.budget_calculation_type === 'WITH_TOOL'
-                    ? Number(subActivity.estimated_cost_with_tool || 0)
-                    : Number(subActivity.estimated_cost_without_tool || 0);
-                  
-                  orgActivityData[orgName].totalCount += 1;
-                  orgActivityData[orgName].totalBudget += cost;
-                  
-                  switch (activityType) {
-                    case 'training':
-                      orgActivityData[orgName].training += 1;
-                      break;
-                    case 'meeting':
-                      orgActivityData[orgName].meeting += 1;
-                      break;
-                    case 'workshop':
-                      orgActivityData[orgName].workshop += 1;
-                      break;
-                    case 'procurement':
-                      orgActivityData[orgName].procurement += 1;
-                      break;
-                    case 'printing':
-                      orgActivityData[orgName].printing += 1;
-                      break;
-                    default:
-                      orgActivityData[orgName].other += 1;
+          if (objective.initiatives && Array.isArray(objective.initiatives)) {
+            objective.initiatives.forEach((initiative: any) => {
+              if (initiative.main_activities && Array.isArray(initiative.main_activities)) {
+                initiative.main_activities.forEach((activity: any) => {
+                  // Process sub-activities
+                  if (activity.sub_activities && Array.isArray(activity.sub_activities)) {
+                    activity.sub_activities.forEach((subActivity: any) => {
+                      const activityType = subActivity.activity_type || 'Other';
+                      if (orgActivityData[orgId][activityType]) {
+                        orgActivityData[orgId][activityType].count++;
+                        orgActivityData[orgId].totalCount++;
+                        
+                        const subCost = subActivity.budget_calculation_type === 'WITH_TOOL'
+                          ? Number(subActivity.estimated_cost_with_tool || 0)
+                          : Number(subActivity.estimated_cost_without_tool || 0);
+                        
+                        orgActivityData[orgId][activityType].budget += subCost;
+                        orgActivityData[orgId].totalBudget += subCost;
+                      }
+                    });
+                  } else if (activity.budget && activity.budget.activity_type) {
+                    // Fallback to legacy budget
+                    const activityType = activity.budget.activity_type || 'Other';
+                    if (orgActivityData[orgId][activityType]) {
+                      orgActivityData[orgId][activityType].count++;
+                      orgActivityData[orgId].totalCount++;
+                      
+                      const cost = activity.budget.budget_calculation_type === 'WITH_TOOL'
+                        ? Number(activity.budget.estimated_cost_with_tool || 0)
+                        : Number(activity.budget.estimated_cost_without_tool || 0);
+                      
+                      orgActivityData[orgId][activityType].budget += cost;
+                      orgActivityData[orgId].totalBudget += cost;
+                    }
                   }
                 });
-              } else if (activity.budget) {
-                const activityType = (activity.budget.activity_type || 'Other').toLowerCase();
-                const cost = activity.budget.budget_calculation_type === 'WITH_TOOL'
-                  ? Number(activity.budget.estimated_cost_with_tool || 0)
-                  : Number(activity.budget.estimated_cost_without_tool || 0);
-                
-                orgActivityData[orgName].totalCount += 1;
-                orgActivityData[orgName].totalBudget += cost;
-                
-                switch (activityType) {
-                  case 'training':
-                    orgActivityData[orgName].training += 1;
-                    break;
-                  case 'meeting':
-                    orgActivityData[orgName].meeting += 1;
-                    break;
-                  case 'workshop':
-                    orgActivityData[orgName].workshop += 1;
-                    break;
-                  case 'procurement':
-                    orgActivityData[orgName].procurement += 1;
-                    break;
-                  case 'printing':
-                    orgActivityData[orgName].printing += 1;
-                    break;
-                  default:
-                    orgActivityData[orgName].other += 1;
-                }
               }
             });
-          });
+          }
         });
       }
     });
@@ -584,13 +492,15 @@ const AdminDashboard: React.FC = () => {
 
   // Calculate executive performance data
   const calculateExecutivePerformance = () => {
-    const allPlans = allPlansData;
+    const submittedAndApprovedPlans = reviewedPlansData.filter(plan => 
+      ['SUBMITTED', 'APPROVED'].includes(plan.status)
+    );
+    
     const executiveData: Record<string, {
       organizationName: string;
       totalPlans: number;
       approved: number;
       submitted: number;
-      rejected: number;
       totalBudget: number;
       availableFunding: number;
       governmentBudget: number;
@@ -599,16 +509,16 @@ const AdminDashboard: React.FC = () => {
       fundingGap: number;
     }> = {};
 
-    allPlans.forEach((plan: any) => {
+    submittedAndApprovedPlans.forEach((plan: any) => {
+      const orgId = plan.organization;
       const orgName = getOrganizationName(plan);
       
-      if (!executiveData[orgName]) {
-        executiveData[orgName] = {
+      if (!executiveData[orgId]) {
+        executiveData[orgId] = {
           organizationName: orgName,
           totalPlans: 0,
           approved: 0,
           submitted: 0,
-          rejected: 0,
           totalBudget: 0,
           availableFunding: 0,
           governmentBudget: 0,
@@ -618,37 +528,21 @@ const AdminDashboard: React.FC = () => {
         };
       }
 
-      executiveData[orgName].totalPlans += 1;
+      executiveData[orgId].totalPlans++;
       
-      if (plan.status === 'APPROVED') executiveData[orgName].approved += 1;
-      if (plan.status === 'SUBMITTED') executiveData[orgName].submitted += 1;
-      if (plan.status === 'REJECTED') executiveData[orgName].rejected += 1;
+      if (plan.status === 'APPROVED') {
+        executiveData[orgId].approved++;
+      } else if (plan.status === 'SUBMITTED') {
+        executiveData[orgId].submitted++;
+      }
 
       const budget = calculatePlanBudget(plan);
-      executiveData[orgName].totalBudget += budget.total;
-      executiveData[orgName].availableFunding += budget.available;
-      executiveData[orgName].fundingGap += budget.gap;
-
-      // Calculate funding sources
-      if (plan.objectives) {
-        plan.objectives.forEach((objective: any) => {
-          objective.initiatives?.forEach((initiative: any) => {
-            initiative.main_activities?.forEach((activity: any) => {
-              if (activity.sub_activities && activity.sub_activities.length > 0) {
-                activity.sub_activities.forEach((subActivity: any) => {
-                  executiveData[orgName].governmentBudget += Number(subActivity.government_treasury || 0);
-                  executiveData[orgName].sdgBudget += Number(subActivity.sdg_funding || 0);
-                  executiveData[orgName].partnersBudget += Number(subActivity.partners_funding || 0);
-                });
-              } else if (activity.budget) {
-                executiveData[orgName].governmentBudget += Number(activity.budget.government_treasury || 0);
-                executiveData[orgName].sdgBudget += Number(activity.budget.sdg_funding || 0);
-                executiveData[orgName].partnersBudget += Number(activity.budget.partners_funding || 0);
-              }
-            });
-          });
-        });
-      }
+      executiveData[orgId].totalBudget += budget.total;
+      executiveData[orgId].availableFunding += budget.totalFunding;
+      executiveData[orgId].governmentBudget += budget.government;
+      executiveData[orgId].sdgBudget += budget.sdg;
+      executiveData[orgId].partnersBudget += budget.partners;
+      executiveData[orgId].fundingGap += budget.gap;
     });
 
     return Object.values(executiveData);
@@ -656,17 +550,13 @@ const AdminDashboard: React.FC = () => {
 
   // Calculate complete budget overview for analytics (only organizations with submitted/approved plans)
   const calculateCompleteBudgetOverview = () => {
-    // Only include organizations that have submitted or approved plans
-    const plansWithActivity = allPlansData.filter(plan => 
+    const plansWithActivity = reviewedPlansData.filter(plan => 
       ['SUBMITTED', 'APPROVED'].includes(plan.status)
     );
     
     const orgBudgetData: Record<string, {
       organizationName: string;
       totalBudget: number;
-      availableFunding: number;
-      fundingGap: number;
-      budget: number;
       funding: number;
     }> = {};
 
@@ -678,127 +568,57 @@ const AdminDashboard: React.FC = () => {
         orgBudgetData[orgId] = {
           organizationName: orgName,
           totalBudget: 0,
-          availableFunding: 0,
-          fundingGap: 0,
-          budget: 0,
           funding: 0
         };
       }
-      
+
       const budget = calculatePlanBudget(plan);
       orgBudgetData[orgId].totalBudget += budget.total;
-      orgBudgetData[orgId].availableFunding += budget.available;
-      orgBudgetData[orgId].fundingGap += budget.gap;
-      orgBudgetData[orgId].budget += budget.total;
-      orgBudgetData[orgId].funding += budget.available;
+      orgBudgetData[orgId].funding += budget.totalFunding;
     });
 
-    return Object.values(orgBudgetData).slice(0, 50); // Limit to 50 organizations
+    return Object.values(orgBudgetData).sort((a, b) => b.totalBudget - a.totalBudget);
   };
 
-  // Review mutation
-  const reviewMutation = useMutation({
-    mutationFn: async (reviewData: { planId: string, status: 'APPROVED' | 'REJECTED', feedback: string }) => {
-      try {
-        await auth.getCurrentUser();
-        const timestamp = new Date().getTime();
-        
-        if (reviewData.status === 'APPROVED') {
-          return api.post(`/plans/${reviewData.planId}/approve/?_=${timestamp}`, { feedback: reviewData.feedback });
-        } else {
-          return api.post(`/plans/${reviewData.planId}/reject/?_=${timestamp}`, { feedback: reviewData.feedback });
-        }
-      } catch (error) {
-        console.error('Review submission failed:', error);
-        throw error;
-      }
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['plans'] });
-      setShowReviewModal(false);
-      setSelectedPlan(null);
-      setSuccess('Plan review submitted successfully');
-      setTimeout(() => setSuccess(null), 3000);
-    },
-    onError: (error: any) => {
-      setError(error.message || 'Failed to submit review');
-      setTimeout(() => setError(null), 5000);
-    },
-  });
+  // Get chart data
+  const budgetData = calculateBudgetData();
+  const activityBudgets = calculateActivityTypeBudgets();
+  const monthlyTrends = calculateMonthlyTrends();
+  const orgPerformance = calculateOrgPerformance();
+  const budgetByActivityData = calculateBudgetByActivityTable();
+  const executivePerformanceData = calculateExecutivePerformance();
+  const completeBudgetOverview = calculateCompleteBudgetOverview();
 
-  // Handle plan review
-  const handleReviewPlan = (plan: any) => {
-    setSelectedPlan(plan);
-    setShowReviewModal(true);
-  };
+  // Filter and sort reviewed plans
+  const getFilteredReviewedPlans = () => {
+    let filtered = reviewedPlansData.filter(plan => 
+      ['APPROVED', 'REJECTED'].includes(plan.status)
+    );
 
-  const handleReviewSubmit = async (data: { status: 'APPROVED' | 'REJECTED'; feedback: string }) => {
-    if (!selectedPlan) return;
-    
-    try {
-      await reviewMutation.mutateAsync({
-        planId: selectedPlan.id,
-        status: data.status,
-        feedback: data.feedback
-      });
-    } catch (error) {
-      console.error('Failed to submit review:', error);
-    }
-  };
-
-  // Format date helper
-  const formatDate = (dateString: string | null | undefined) => {
-    if (!dateString) return 'Not available';
-    try {
-      return format(new Date(dateString), 'MMM d, yyyy');
-    } catch (e) {
-      return 'Invalid date';
-    }
-  };
-
-  // Handle refresh
-  const handleRefresh = async () => {
-    setIsRefreshing(true);
-    setError(null);
-    try {
-      await refetch();
-      setSuccess('Data refreshed successfully');
-      setTimeout(() => setSuccess(null), 3000);
-    } catch (err) {
-      setError('Failed to refresh data');
-    } finally {
-      setIsRefreshing(false);
-    }
-  };
-
-  // Filter and sort plans
-  const getFilteredPlans = () => {
-    let filtered = allPlansData;
-
-    // Status filter
-    if (statusFilter !== 'all') {
-      filtered = filtered.filter(plan => plan.status === statusFilter);
+    // Apply status filter
+    if (reviewedFilter !== 'all') {
+      filtered = filtered.filter(plan => plan.status === reviewedFilter);
     }
 
-    // Organization filter
-    if (organizationFilter !== 'all') {
-      filtered = filtered.filter(plan => String(plan.organization) === organizationFilter);
+    // Apply organization filter
+    if (reviewedOrgFilter !== 'all') {
+      filtered = filtered.filter(plan => plan.organization === reviewedOrgFilter);
     }
 
-    // Search filter
-    if (searchTerm) {
+    // Apply search filter
+    if (reviewedSearch) {
       filtered = filtered.filter(plan => 
-        plan.planner_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        getOrganizationName(plan).toLowerCase().includes(searchTerm.toLowerCase())
+        getOrganizationName(plan).toLowerCase().includes(reviewedSearch.toLowerCase()) ||
+        (plan.planner_name && plan.planner_name.toLowerCase().includes(reviewedSearch.toLowerCase()))
       );
     }
 
-    // Sort
+    // Apply sorting
     filtered.sort((a, b) => {
       let aValue, bValue;
       
-      switch (sortField) {
-        case 'submitted_at':
+      switch (reviewedSortBy) {
+        case 'date':
           aValue = new Date(a.submitted_at || a.created_at).getTime();
           bValue = new Date(b.submitted_at || b.created_at).getTime();
           break;
@@ -814,7 +634,7 @@ const AdminDashboard: React.FC = () => {
           return 0;
       }
       
-      if (sortOrder === 'asc') {
+      if (reviewedSortOrder === 'asc') {
         return aValue > bValue ? 1 : -1;
       } else {
         return aValue < bValue ? 1 : -1;
@@ -824,112 +644,143 @@ const AdminDashboard: React.FC = () => {
     return filtered;
   };
 
-  // Pagination helpers
-  const getPaginatedData = (data: any[], page: number) => {
-    const startIndex = (page - 1) * itemsPerPage;
-    const endIndex = startIndex + itemsPerPage;
-    return data.slice(startIndex, endIndex);
+  const filteredReviewedPlans = getFilteredReviewedPlans();
+
+  // Pagination for reviewed plans
+  const reviewedTotalPages = Math.ceil(filteredReviewedPlans.length / reviewedItemsPerPage);
+  const reviewedStartIndex = (reviewedCurrentPage - 1) * reviewedItemsPerPage;
+  const reviewedPaginatedPlans = filteredReviewedPlans.slice(
+    reviewedStartIndex, 
+    reviewedStartIndex + reviewedItemsPerPage
+  );
+
+  // Pagination for budget by activity
+  const budgetActivityTotalPages = Math.ceil(budgetByActivityData.length / budgetActivityItemsPerPage);
+  const budgetActivityStartIndex = (budgetActivityCurrentPage - 1) * budgetActivityItemsPerPage;
+  const budgetActivityPaginatedData = budgetByActivityData.slice(
+    budgetActivityStartIndex,
+    budgetActivityStartIndex + budgetActivityItemsPerPage
+  );
+
+  // Pagination for executive performance
+  const executiveTotalPages = Math.ceil(executivePerformanceData.length / executiveItemsPerPage);
+  const executiveStartIndex = (executiveCurrentPage - 1) * executiveItemsPerPage;
+  const executivePaginatedData = executivePerformanceData.slice(
+    executiveStartIndex,
+    executiveStartIndex + executiveItemsPerPage
+  );
+
+  const formatDate = (dateString: string | null | undefined) => {
+    if (!dateString) return 'Not available';
+    try {
+      return format(new Date(dateString), 'MMM d, yyyy');
+    } catch (e) {
+      return 'Invalid date';
+    }
   };
 
-  const getTotalPages = (dataLength: number) => {
-    return Math.ceil(dataLength / itemsPerPage);
+  const formatCurrency = (amount: number): string => {
+    return `$${amount.toLocaleString()}`;
   };
 
-  // Get data for charts and tables
-  const budgetData = calculateBudgetData();
-  const activityTypeBudgets = calculateActivityTypeBudgets();
-  const monthlyTrends = calculateMonthlyTrends();
-  const orgPerformance = calculateOrgPerformance();
-  const budgetByActivityTable = calculateBudgetByActivityTable();
-  const executivePerformance = calculateExecutivePerformance();
-  const completeBudgetOverview = calculateCompleteBudgetOverview();
-
-  // Chart data preparation
-  const planStatusData = {
-    labels: ['Submitted', 'Approved', 'Rejected'],
+  // Chart configurations
+  const planStatusChartData = {
+    labels: ['Approved', 'Rejected', 'Pending'],
     datasets: [{
-      data: [pendingCount, approvedCount, rejectedCount],
-      backgroundColor: ['#fbbf24', '#10b981', '#ef4444'],
+      data: [approvedCount, rejectedCount, pendingCount],
+      backgroundColor: ['#10B981', '#EF4444', '#F59E0B'],
       borderWidth: 2,
       borderColor: '#ffffff'
     }]
   };
 
-  const budgetDistributionData = {
-    labels: ['Government', 'SDG', 'Partners', 'Other', 'Gap'],
+  const budgetDistributionChartData = {
+    labels: ['Government', 'Partners', 'SDG', 'Other', 'Gap'],
     datasets: [{
       data: [
-        budgetData.totalGovernment,
-        budgetData.totalSDG,
-        budgetData.totalPartners,
-        budgetData.totalOther,
-        budgetData.fundingGap
+        budgetTotals.governmentTotal,
+        budgetTotals.partnersTotal,
+        budgetTotals.sdgTotal,
+        budgetTotals.otherTotal,
+        budgetTotals.fundingGap
       ],
-      backgroundColor: ['#3b82f6', '#10b981', '#8b5cf6', '#f59e0b', '#ef4444'],
+      backgroundColor: ['#3B82F6', '#8B5CF6', '#10B981', '#F59E0B', '#EF4444'],
       borderWidth: 2,
       borderColor: '#ffffff'
     }]
   };
 
-  // Monthly trends data
-  const monthlyTrendsData = {
-    labels: Object.keys(monthlyTrends),
+  const monthlyTrendsChartData = {
+    labels: monthlyTrends.labels,
     datasets: [
       {
-        label: 'Plans Submitted',
-        data: Object.values(monthlyTrends).map(data => data.submissions),
-        borderColor: '#3b82f6',
+        type: 'line' as const,
+        label: 'Submissions',
+        data: monthlyTrends.submissions,
+        borderColor: '#3B82F6',
         backgroundColor: 'rgba(59, 130, 246, 0.1)',
-        tension: 0.4,
-        yAxisID: 'y'
+        yAxisID: 'y',
+        tension: 0.4
       },
       {
-        label: 'Budget (Millions)',
-        data: Object.values(monthlyTrends).map(data => data.budget / 1000000),
-        borderColor: '#10b981',
-        backgroundColor: 'rgba(16, 185, 129, 0.1)',
-        tension: 0.4,
+        type: 'bar' as const,
+        label: 'Budget ($)',
+        data: monthlyTrends.budgets,
+        backgroundColor: 'rgba(16, 185, 129, 0.8)',
         yAxisID: 'y1'
       }
     ]
   };
 
-  // Top organizations data
-  const topOrganizationsData = {
-    labels: orgPerformance.map(org => org.name),
-    datasets: [{
-      label: 'Number of Plans',
-      data: orgPerformance.map(org => org.plans),
-      backgroundColor: 'rgba(59, 130, 246, 0.8)',
-      borderColor: 'rgba(59, 130, 246, 1)',
-      borderWidth: 1
-    }]
+  const orgPerformanceChartData = {
+    labels: orgPerformance.labels,
+    datasets: [
+      {
+        label: 'Plans Count',
+        data: orgPerformance.plans,
+        backgroundColor: 'rgba(59, 130, 246, 0.8)',
+        yAxisID: 'y'
+      },
+      {
+        label: 'Budget ($)',
+        data: orgPerformance.budgets,
+        backgroundColor: 'rgba(16, 185, 129, 0.8)',
+        yAxisID: 'y1'
+      }
+    ]
   };
 
-  // Complete Budget Overview Chart Data
-  const budgetOverviewChartData = {
+  // Complete Budget Overview Chart Data (for organizations with submitted/approved plans)
+  const completeBudgetChartData = {
     labels: completeBudgetOverview.map(org => org.organizationName),
     datasets: [
       {
         label: 'Total Budget',
         data: completeBudgetOverview.map(org => org.totalBudget),
-        backgroundColor: 'rgba(59, 130, 246, 0.8)',
-        borderColor: 'rgba(59, 130, 246, 1)',
-        borderWidth: 1
+        backgroundColor: completeBudgetOverview.map((_, index) => {
+          const colors = [
+            '#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', 
+            '#06B6D4', '#84CC16', '#F97316', '#EC4899', '#6366F1',
+            '#14B8A6', '#F59E0B', '#8B5CF6', '#06B6D4', '#84CC16'
+          ];
+          return colors[index % colors.length];
+        }),
+        borderWidth: 1,
+        borderRadius: 4
       },
       {
         label: 'Available Funding',
-        data: completeBudgetOverview.map(org => org.availableFunding),
-        backgroundColor: 'rgba(16, 185, 129, 0.8)',
-        borderColor: 'rgba(16, 185, 129, 1)',
-        borderWidth: 1
-      },
-      {
-        label: 'Funding Gap',
-        data: completeBudgetOverview.map(org => org.fundingGap),
-        backgroundColor: 'rgba(239, 68, 68, 0.8)',
-        borderColor: 'rgba(239, 68, 68, 1)',
-        borderWidth: 1
+        data: completeBudgetOverview.map(org => org.funding),
+        backgroundColor: completeBudgetOverview.map((_, index) => {
+          const colors = [
+            '#93C5FD', '#86EFAC', '#FCD34D', '#FCA5A5', '#C4B5FD',
+            '#67E8F9', '#BEF264', '#FDBA74', '#F9A8D4', '#A5B4FC',
+            '#5EEAD4', '#FCD34D', '#C4B5FD', '#67E8F9', '#BEF264'
+          ];
+          return colors[index % colors.length];
+        }),
+        borderWidth: 1,
+        borderRadius: 4
       }
     ]
   };
@@ -937,16 +788,21 @@ const AdminDashboard: React.FC = () => {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
-        <Loader className="h-6 w-6 animate-spin mr-2 text-green-600" />
+        <Loader className="h-6 w-6 animate-spin mr-2 text-blue-600" />
         <span className="text-lg">Loading admin dashboard...</span>
       </div>
     );
   }
 
-  const filteredPlans = getFilteredPlans();
-  const paginatedPlans = getPaginatedData(filteredPlans, currentPage);
-  const paginatedBudgetActivity = getPaginatedData(budgetByActivityTable, budgetActivityPage);
-  const paginatedExecutivePerformance = getPaginatedData(executivePerformance, executivePage);
+  if (error) {
+    return (
+      <div className="p-8 bg-red-50 border border-red-200 rounded-lg text-center">
+        <AlertCircle className="h-12 w-12 text-red-500 mx-auto mb-4" />
+        <h3 className="text-lg font-medium text-red-800">Access Denied</h3>
+        <p className="text-red-600 mt-2">{error}</p>
+      </div>
+    );
+  }
 
   return (
     <div className="px-4 py-6 sm:px-0">
@@ -956,39 +812,24 @@ const AdminDashboard: React.FC = () => {
           <div className="flex items-center justify-between">
             <div>
               <div className="flex items-center mb-4">
-                <Shield className="h-12 w-12 mr-4 text-white drop-shadow-lg" />
+                <Shield className="h-12 w-12 text-white mr-4" />
                 <div>
-                  <h1 className="text-4xl font-bold drop-shadow-md">Admin Dashboard</h1>
-                  <p className="text-xl opacity-90 mt-2">Ministry of Health - Comprehensive Planning System</p>
+                  <h1 className="text-4xl font-bold">Admin Dashboard</h1>
+                  <p className="text-xl text-blue-100">Ministry of Health - System Overview</p>
                 </div>
               </div>
-              <p className="text-lg opacity-80 max-w-2xl">
-                Monitor and manage strategic planning activities across all organizational levels. 
-                Track plan submissions, review processes, budget allocations, and system-wide performance metrics.
+              <p className="text-lg text-blue-100 max-w-2xl">
+                Comprehensive monitoring and analysis of strategic planning activities across all organizational units. 
+                Track plan submissions, budget allocations, and performance metrics in real-time.
               </p>
             </div>
             <div className="text-right">
               <div className="text-3xl font-bold">{totalPlans}</div>
-              <div className="text-sm opacity-80">Total Plans</div>
+              <div className="text-blue-100">Total Plans</div>
             </div>
           </div>
         </div>
       </div>
-
-      {/* Status Messages */}
-      {error && (
-        <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg flex items-center text-red-700">
-          <AlertCircle className="h-5 w-5 mr-2" />
-          {error}
-        </div>
-      )}
-
-      {success && (
-        <div className="mb-4 p-4 bg-green-50 border border-green-200 rounded-lg flex items-center text-green-700">
-          <CheckCircle className="h-5 w-5 mr-2" />
-          {success}
-        </div>
-      )}
 
       {/* Tab Navigation */}
       <div className="mb-6">
@@ -1012,7 +853,12 @@ const AdminDashboard: React.FC = () => {
                   : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
               }`}
             >
-              All Plans
+              Reviewed Plans
+              {(approvedCount + rejectedCount) > 0 && (
+                <span className="ml-2 bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full text-xs">
+                  {approvedCount + rejectedCount}
+                </span>
+              )}
             </button>
             <button
               onClick={() => setActiveTab('budget-activity')}
@@ -1051,47 +897,47 @@ const AdminDashboard: React.FC = () => {
       {/* Overview Tab */}
       {activeTab === 'overview' && (
         <div className="space-y-8">
-          {/* Plan Statistics Cards */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-            <div className="bg-gradient-to-br from-blue-500 to-blue-600 p-6 rounded-xl shadow-lg text-white">
+          {/* Top Statistics Cards - Plan Status */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+            <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg shadow-lg p-6 text-white">
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-blue-100 text-sm font-medium">Total Plans</p>
                   <p className="text-3xl font-bold">{totalPlans}</p>
-                  <p className="text-blue-100 text-xs mt-1">Submitted + Approved</p>
+                  <p className="text-blue-100 text-xs">Submitted + Approved</p>
                 </div>
-                <FileText className="h-12 w-12 text-blue-200" />
+                <ClipboardCheck className="h-12 w-12 text-blue-200" />
               </div>
             </div>
 
-            <div className="bg-gradient-to-br from-amber-500 to-amber-600 p-6 rounded-xl shadow-lg text-white">
+            <div className="bg-gradient-to-br from-amber-500 to-amber-600 rounded-lg shadow-lg p-6 text-white">
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-amber-100 text-sm font-medium">Pending Review</p>
                   <p className="text-3xl font-bold">{pendingCount}</p>
-                  <p className="text-amber-100 text-xs mt-1">Awaiting evaluation</p>
+                  <p className="text-amber-100 text-xs">Awaiting evaluation</p>
                 </div>
-                <Clock className="h-12 w-12 text-amber-200" />
+                <AlertCircle className="h-12 w-12 text-amber-200" />
               </div>
             </div>
 
-            <div className="bg-gradient-to-br from-green-500 to-green-600 p-6 rounded-xl shadow-lg text-white">
+            <div className="bg-gradient-to-br from-green-500 to-green-600 rounded-lg shadow-lg p-6 text-white">
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-green-100 text-sm font-medium">Approved</p>
                   <p className="text-3xl font-bold">{approvedCount}</p>
-                  <p className="text-green-100 text-xs mt-1">Successfully reviewed</p>
+                  <p className="text-green-100 text-xs">Successfully reviewed</p>
                 </div>
                 <CheckCircle className="h-12 w-12 text-green-200" />
               </div>
             </div>
 
-            <div className="bg-gradient-to-br from-red-500 to-red-600 p-6 rounded-xl shadow-lg text-white">
+            <div className="bg-gradient-to-br from-red-500 to-red-600 rounded-lg shadow-lg p-6 text-white">
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-red-100 text-sm font-medium">Rejected</p>
                   <p className="text-3xl font-bold">{rejectedCount}</p>
-                  <p className="text-red-100 text-xs mt-1">Needs revision</p>
+                  <p className="text-red-100 text-xs">Needs revision</p>
                 </div>
                 <XCircle className="h-12 w-12 text-red-200" />
               </div>
@@ -1100,34 +946,34 @@ const AdminDashboard: React.FC = () => {
 
           {/* Budget Overview Cards */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="bg-gradient-to-br from-indigo-500 to-indigo-600 p-6 rounded-xl shadow-lg text-white">
+            <div className="bg-gradient-to-br from-indigo-500 to-indigo-600 rounded-lg shadow-lg p-6 text-white">
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-indigo-100 text-sm font-medium">Total Budget</p>
-                  <p className="text-2xl font-bold">${budgetData.totalBudget.toLocaleString()}</p>
-                  <p className="text-indigo-100 text-xs mt-1">All LEO/EO Plans</p>
+                  <p className="text-2xl font-bold">{formatCurrency(budgetTotals.totalBudget)}</p>
+                  <p className="text-indigo-100 text-xs">All LEO/EO Plans</p>
                 </div>
                 <DollarSign className="h-10 w-10 text-indigo-200" />
               </div>
             </div>
 
-            <div className="bg-gradient-to-br from-emerald-500 to-emerald-600 p-6 rounded-xl shadow-lg text-white">
+            <div className="bg-gradient-to-br from-emerald-500 to-emerald-600 rounded-lg shadow-lg p-6 text-white">
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-emerald-100 text-sm font-medium">Available Funding</p>
-                  <p className="text-2xl font-bold">${budgetData.totalAvailable.toLocaleString()}</p>
-                  <p className="text-emerald-100 text-xs mt-1">All sources combined</p>
+                  <p className="text-2xl font-bold">{formatCurrency(budgetTotals.totalFunding)}</p>
+                  <p className="text-emerald-100 text-xs">All sources combined</p>
                 </div>
-                <CheckCircle className="h-10 w-10 text-emerald-200" />
+                <TrendingUp className="h-10 w-10 text-emerald-200" />
               </div>
             </div>
 
-            <div className="bg-gradient-to-br from-rose-500 to-rose-600 p-6 rounded-xl shadow-lg text-white">
+            <div className="bg-gradient-to-br from-rose-500 to-rose-600 rounded-lg shadow-lg p-6 text-white">
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-rose-100 text-sm font-medium">Funding Gap</p>
-                  <p className="text-2xl font-bold">${budgetData.fundingGap.toLocaleString()}</p>
-                  <p className="text-rose-100 text-xs mt-1">Additional needed</p>
+                  <p className="text-2xl font-bold">{formatCurrency(budgetTotals.fundingGap)}</p>
+                  <p className="text-rose-100 text-xs">Additional funding needed</p>
                 </div>
                 <AlertCircle className="h-10 w-10 text-rose-200" />
               </div>
@@ -1136,71 +982,178 @@ const AdminDashboard: React.FC = () => {
 
           {/* Budget by Activity Type Cards */}
           <div>
-            <h3 className="text-xl font-bold text-gray-900 mb-6">Budget by Activity Type</h3>
+            <h3 className="text-lg font-medium text-gray-900 mb-4">Budget by Activity Type</h3>
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
-              {Object.entries(activityTypeBudgets).map(([type, data], index) => {
-                const colors = [
-                  'from-blue-500 to-blue-600',
-                  'from-green-500 to-green-600', 
-                  'from-purple-500 to-purple-600',
-                  'from-orange-500 to-orange-600',
-                  'from-pink-500 to-pink-600',
-                  'from-indigo-500 to-indigo-600',
-                  'from-gray-500 to-gray-600'
-                ];
-                
-                return (
-                  <div key={type} className={`bg-gradient-to-br ${colors[index]} p-4 rounded-lg shadow-md text-white`}>
-                    <div className="text-center">
-                      <Activity className="h-8 w-8 mx-auto mb-2 text-white opacity-80" />
-                      <p className="text-sm font-medium opacity-90">{type}</p>
-                      <p className="text-xl font-bold">{data.count}</p>
-                      <p className="text-xs opacity-75">${data.budget.toLocaleString()}</p>
-                    </div>
-                  </div>
-                );
-              })}
+              <div className="bg-gradient-to-br from-blue-400 to-blue-500 rounded-lg shadow-md p-4 text-white">
+                <div className="flex items-center justify-between mb-2">
+                  <GraduationCap className="h-8 w-8 text-blue-100" />
+                  <span className="text-xs bg-blue-600 px-2 py-1 rounded-full">
+                    {activityBudgets.Training.count}
+                  </span>
+                </div>
+                <h4 className="font-medium text-sm">Training</h4>
+                <p className="text-xs text-blue-100">{formatCurrency(activityBudgets.Training.budget)}</p>
+              </div>
+
+              <div className="bg-gradient-to-br from-green-400 to-green-500 rounded-lg shadow-md p-4 text-white">
+                <div className="flex items-center justify-between mb-2">
+                  <MessageSquare className="h-8 w-8 text-green-100" />
+                  <span className="text-xs bg-green-600 px-2 py-1 rounded-full">
+                    {activityBudgets.Meeting.count}
+                  </span>
+                </div>
+                <h4 className="font-medium text-sm">Meeting</h4>
+                <p className="text-xs text-green-100">{formatCurrency(activityBudgets.Meeting.budget)}</p>
+              </div>
+
+              <div className="bg-gradient-to-br from-purple-400 to-purple-500 rounded-lg shadow-md p-4 text-white">
+                <div className="flex items-center justify-between mb-2">
+                  <Users className="h-8 w-8 text-purple-100" />
+                  <span className="text-xs bg-purple-600 px-2 py-1 rounded-full">
+                    {activityBudgets.Workshop.count}
+                  </span>
+                </div>
+                <h4 className="font-medium text-sm">Workshop</h4>
+                <p className="text-xs text-purple-100">{formatCurrency(activityBudgets.Workshop.budget)}</p>
+              </div>
+
+              <div className="bg-gradient-to-br from-orange-400 to-orange-500 rounded-lg shadow-md p-4 text-white">
+                <div className="flex items-center justify-between mb-2">
+                  <Eye className="h-8 w-8 text-orange-100" />
+                  <span className="text-xs bg-orange-600 px-2 py-1 rounded-full">
+                    {activityBudgets.Supervision.count}
+                  </span>
+                </div>
+                <h4 className="font-medium text-sm">Supervision</h4>
+                <p className="text-xs text-orange-100">{formatCurrency(activityBudgets.Supervision.budget)}</p>
+              </div>
+
+              <div className="bg-gradient-to-br from-teal-400 to-teal-500 rounded-lg shadow-md p-4 text-white">
+                <div className="flex items-center justify-between mb-2">
+                  <Package className="h-8 w-8 text-teal-100" />
+                  <span className="text-xs bg-teal-600 px-2 py-1 rounded-full">
+                    {activityBudgets.Procurement.count}
+                  </span>
+                </div>
+                <h4 className="font-medium text-sm">Procurement</h4>
+                <p className="text-xs text-teal-100">{formatCurrency(activityBudgets.Procurement.budget)}</p>
+              </div>
+
+              <div className="bg-gradient-to-br from-pink-400 to-pink-500 rounded-lg shadow-md p-4 text-white">
+                <div className="flex items-center justify-between mb-2">
+                  <FileText className="h-8 w-8 text-pink-100" />
+                  <span className="text-xs bg-pink-600 px-2 py-1 rounded-full">
+                    {activityBudgets.Printing.count}
+                  </span>
+                </div>
+                <h4 className="font-medium text-sm">Printing</h4>
+                <p className="text-xs text-pink-100">{formatCurrency(activityBudgets.Printing.budget)}</p>
+              </div>
+
+              <div className="bg-gradient-to-br from-gray-400 to-gray-500 rounded-lg shadow-md p-4 text-white">
+                <div className="flex items-center justify-between mb-2">
+                  <Wrench className="h-8 w-8 text-gray-100" />
+                  <span className="text-xs bg-gray-600 px-2 py-1 rounded-full">
+                    {activityBudgets.Other.count}
+                  </span>
+                </div>
+                <h4 className="font-medium text-sm">Other</h4>
+                <p className="text-xs text-gray-100">{formatCurrency(activityBudgets.Other.budget)}</p>
+              </div>
             </div>
           </div>
 
           {/* Charts Section */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Plan Status Distribution */}
             <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
-              <h3 className="text-lg font-medium text-gray-900 mb-4">Plan Status Distribution</h3>
+              <h3 className="text-lg font-medium text-gray-900 mb-4 flex items-center">
+                <PieChart className="h-5 w-5 mr-2 text-blue-600" />
+                Plan Status Distribution
+              </h3>
               <div className="h-64">
-                <Doughnut data={planStatusData} options={{ maintainAspectRatio: false }} />
+                <Doughnut 
+                  data={planStatusChartData}
+                  options={{
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                      legend: {
+                        position: 'bottom' as const,
+                      }
+                    }
+                  }}
+                />
               </div>
             </div>
 
+            {/* Budget & Funding Distribution */}
             <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
-              <h3 className="text-lg font-medium text-gray-900 mb-4">Budget & Funding Distribution</h3>
+              <h3 className="text-lg font-medium text-gray-900 mb-4 flex items-center">
+                <DollarSign className="h-5 w-5 mr-2 text-green-600" />
+                Budget & Funding Distribution
+              </h3>
               <div className="h-64">
-                <Doughnut data={budgetDistributionData} options={{ maintainAspectRatio: false }} />
+                <Doughnut 
+                  data={budgetDistributionChartData}
+                  options={{
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                      legend: {
+                        position: 'bottom' as const,
+                      }
+                    }
+                  }}
+                />
               </div>
             </div>
           </div>
 
-          {/* Monthly Trends */}
+          {/* Monthly Submission Trends */}
           <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
-            <h3 className="text-lg font-medium text-gray-900 mb-4">Monthly Submission Trends</h3>
+            <h3 className="text-lg font-medium text-gray-900 mb-4 flex items-center">
+              <TrendingUp className="h-5 w-5 mr-2 text-purple-600" />
+              Monthly Submission Trends
+            </h3>
             <div className="h-80">
               <Line 
-                data={monthlyTrendsData} 
+                data={monthlyTrendsChartData}
                 options={{
+                  responsive: true,
                   maintainAspectRatio: false,
+                  interaction: {
+                    mode: 'index' as const,
+                    intersect: false,
+                  },
                   scales: {
-                    y: {
-                      type: 'linear',
+                    x: {
                       display: true,
-                      position: 'left',
-                      title: { display: true, text: 'Number of Plans' }
+                      title: {
+                        display: true,
+                        text: 'Month'
+                      }
+                    },
+                    y: {
+                      type: 'linear' as const,
+                      display: true,
+                      position: 'left' as const,
+                      title: {
+                        display: true,
+                        text: 'Number of Submissions'
+                      }
                     },
                     y1: {
-                      type: 'linear',
+                      type: 'linear' as const,
                       display: true,
-                      position: 'right',
-                      title: { display: true, text: 'Budget (Millions)' },
-                      grid: { drawOnChartArea: false }
+                      position: 'right' as const,
+                      title: {
+                        display: true,
+                        text: 'Budget Amount ($)'
+                      },
+                      grid: {
+                        drawOnChartArea: false,
+                      },
                     }
                   }
                 }}
@@ -1208,123 +1161,43 @@ const AdminDashboard: React.FC = () => {
             </div>
           </div>
 
-          {/* Top Organizations */}
+          {/* Top Organizations by Plan Activity */}
           <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
-            <h3 className="text-lg font-medium text-gray-900 mb-4">Top Organizations by Plan Activity</h3>
+            <h3 className="text-lg font-medium text-gray-900 mb-4 flex items-center">
+              <BarChart3 className="h-5 w-5 mr-2 text-indigo-600" />
+              Top Organizations by Plan Activity
+            </h3>
             <div className="h-80">
               <Bar 
-                data={topOrganizationsData} 
+                data={orgPerformanceChartData}
                 options={{
+                  responsive: true,
                   maintainAspectRatio: false,
                   scales: {
                     y: {
-                      beginAtZero: true,
-                      title: { display: true, text: 'Number of Plans' }
+                      type: 'linear' as const,
+                      display: true,
+                      position: 'left' as const,
+                      title: {
+                        display: true,
+                        text: 'Number of Plans'
+                      }
+                    },
+                    y1: {
+                      type: 'linear' as const,
+                      display: true,
+                      position: 'right' as const,
+                      title: {
+                        display: true,
+                        text: 'Budget Amount ($)'
+                      },
+                      grid: {
+                        drawOnChartArea: false,
+                      },
                     }
                   }
                 }}
               />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Budget by Activity Tab */}
-      {activeTab === 'budget-activity' && (
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200">
-          <div className="p-6">
-            <h3 className="text-lg font-medium text-gray-900 mb-6">Budget by Activity Type</h3>
-            
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Organization Name</th>
-                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Training</th>
-                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Meeting</th>
-                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Workshop</th>
-                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Procurement</th>
-                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Printing</th>
-                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Other</th>
-                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Total Count</th>
-                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Total Budget</th>
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {paginatedBudgetActivity.map((row: any, index: number) => (
-                    <tr key={index} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="flex items-center">
-                          <Building2 className="h-5 w-5 text-gray-400 mr-2" />
-                          <span className="text-sm font-medium text-gray-900">{row.organizationName}</span>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-center">
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                          {row.training}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-center">
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                          {row.meeting}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-center">
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
-                          {row.workshop}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-center">
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-800">
-                          {row.procurement}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-center">
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-pink-100 text-pink-800">
-                          {row.printing}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-center">
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
-                          {row.other}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-center">
-                        <span className="text-sm font-bold text-gray-900">{row.totalCount}</span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-center">
-                        <span className="text-sm font-bold text-green-600">${row.totalBudget.toLocaleString()}</span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Pagination for Budget Activity */}
-            <div className="flex items-center justify-between mt-6">
-              <div className="text-sm text-gray-700">
-                Showing {((budgetActivityPage - 1) * itemsPerPage) + 1} to {Math.min(budgetActivityPage * itemsPerPage, budgetByActivityTable.length)} of {budgetByActivityTable.length} organizations
-              </div>
-              <div className="flex items-center space-x-2">
-                <button
-                  onClick={() => setBudgetActivityPage(Math.max(1, budgetActivityPage - 1))}
-                  disabled={budgetActivityPage === 1}
-                  className="px-3 py-1 border border-gray-300 rounded-md disabled:opacity-50 hover:bg-gray-50"
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                </button>
-                <span className="px-3 py-1 text-sm text-gray-700">
-                  Page {budgetActivityPage} of {getTotalPages(budgetByActivityTable.length)}
-                </span>
-                <button
-                  onClick={() => setBudgetActivityPage(Math.min(getTotalPages(budgetByActivityTable.length), budgetActivityPage + 1))}
-                  disabled={budgetActivityPage === getTotalPages(budgetByActivityTable.length)}
-                  className="px-3 py-1 border border-gray-300 rounded-md disabled:opacity-50 hover:bg-gray-50"
-                >
-                  <ChevronRight className="h-4 w-4" />
-                </button>
-              </div>
             </div>
           </div>
         </div>
@@ -1332,204 +1205,452 @@ const AdminDashboard: React.FC = () => {
 
       {/* Reviewed Plans Tab */}
       {activeTab === 'reviewed' && (
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
           <div className="p-6">
-            <div className="flex justify-between items-center mb-6">
-              <h3 className="text-lg font-medium text-gray-900">All Plans</h3>
-              
-              {/* Filters */}
-              <div className="flex items-center space-x-4">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 space-y-4 sm:space-y-0">
+              <div>
+                <h3 className="text-lg font-medium leading-6 text-gray-900">Reviewed Plans</h3>
+                <p className="mt-1 text-sm text-gray-500">
+                  All plans that have been reviewed (approved or rejected)
+                </p>
+              </div>
+              <div className="flex flex-col sm:flex-row items-start sm:items-center space-y-2 sm:space-y-0 sm:space-x-4">
                 <div className="flex items-center space-x-2">
-                  <Filter className="h-4 w-4 text-gray-400" />
-                  <select
-                    value={statusFilter}
-                    onChange={(e) => setStatusFilter(e.target.value)}
-                    className="text-sm border border-gray-300 rounded-md px-3 py-1"
-                  >
-                    <option value="all">All Status</option>
-                    <option value="SUBMITTED">Submitted</option>
-                    <option value="APPROVED">Approved</option>
-                    <option value="REJECTED">Rejected</option>
-                  </select>
+                  <Search className="h-4 w-4 text-gray-400" />
+                  <input
+                    type="text"
+                    placeholder="Search planner or organization..."
+                    value={reviewedSearch}
+                    onChange={(e) => setReviewedSearch(e.target.value)}
+                    className="text-sm border border-gray-300 rounded-md px-3 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
                 </div>
-                
                 <select
-                  value={organizationFilter}
-                  onChange={(e) => setOrganizationFilter(e.target.value)}
-                  className="text-sm border border-gray-300 rounded-md px-3 py-1"
+                  value={reviewedFilter}
+                  onChange={(e) => setReviewedFilter(e.target.value)}
+                  className="text-sm rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                >
+                  <option value="all">All Status</option>
+                  <option value="APPROVED">Approved</option>
+                  <option value="REJECTED">Rejected</option>
+                </select>
+                <select
+                  value={reviewedOrgFilter}
+                  onChange={(e) => setReviewedOrgFilter(e.target.value)}
+                  className="text-sm rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
                 >
                   <option value="all">All Organizations</option>
                   {Object.entries(organizationsMap).map(([id, name]) => (
                     <option key={id} value={id}>{name}</option>
                   ))}
                 </select>
-                
-                <div className="relative">
-                  <Search className="h-4 w-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
-                  <input
-                    type="text"
-                    placeholder="Search planner..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="pl-10 pr-4 py-1 text-sm border border-gray-300 rounded-md"
-                  />
-                </div>
+                <button
+                  onClick={() => refetch()}
+                  className="flex items-center px-3 py-2 text-sm text-blue-600 hover:text-blue-800 border border-blue-200 rounded-md"
+                >
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  Refresh
+                </button>
               </div>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th 
-                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                      onClick={() => {
-                        if (sortField === 'organization') {
-                          setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
-                        } else {
-                          setSortField('organization');
-                          setSortOrder('asc');
-                        }
-                      }}
-                    >
-                      <div className="flex items-center">
-                        Organization
-                        {sortField === 'organization' && (
-                          sortOrder === 'asc' ? <ArrowUp className="h-4 w-4 ml-1" /> : <ArrowDown className="h-4 w-4 ml-1" />
-                        )}
-                      </div>
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Planner</th>
-                    <th 
-                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                      onClick={() => {
-                        if (sortField === 'submitted_at') {
-                          setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
-                        } else {
-                          setSortField('submitted_at');
-                          setSortOrder('desc');
-                        }
-                      }}
-                    >
-                      <div className="flex items-center">
-                        Date
-                        {sortField === 'submitted_at' && (
-                          sortOrder === 'asc' ? <ArrowUp className="h-4 w-4 ml-1" /> : <ArrowDown className="h-4 w-4 ml-1" />
-                        )}
-                      </div>
-                    </th>
-                    <th 
-                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                      onClick={() => {
-                        if (sortField === 'status') {
-                          setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
-                        } else {
-                          setSortField('status');
-                          setSortOrder('asc');
-                        }
-                      }}
-                    >
-                      <div className="flex items-center">
-                        Status
-                        {sortField === 'status' && (
-                          sortOrder === 'asc' ? <ArrowUp className="h-4 w-4 ml-1" /> : <ArrowDown className="h-4 w-4 ml-1" />
-                        )}
-                      </div>
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Budget Analysis</th>
-                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {paginatedPlans.map((plan: any) => {
-                    const planBudget = calculatePlanBudget(plan);
-                    const fundingCoverage = planBudget.total > 0 
-                      ? ((planBudget.available / planBudget.total) * 100).toFixed(1)
-                      : '0';
-                    
-                    return (
-                      <tr key={plan.id} className="hover:bg-gray-50">
-                        <td className="px-6 py-4 whitespace-nowrap">
+            {filteredReviewedPlans.length === 0 ? (
+              <div className="text-center py-12 bg-gray-50 rounded-lg border-2 border-dashed border-gray-200">
+                <ClipboardCheck className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+                <h3 className="text-lg font-medium text-gray-900 mb-1">No reviewed plans found</h3>
+                <p className="text-gray-500">No plans match your current filters.</p>
+              </div>
+            ) : (
+              <>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th 
+                          className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                          onClick={() => {
+                            if (reviewedSortBy === 'organization') {
+                              setReviewedSortOrder(reviewedSortOrder === 'asc' ? 'desc' : 'asc');
+                            } else {
+                              setReviewedSortBy('organization');
+                              setReviewedSortOrder('asc');
+                            }
+                          }}
+                        >
                           <div className="flex items-center">
-                            <Building2 className="h-5 w-5 text-gray-400 mr-2" />
-                            <span className="text-sm font-medium text-gray-900">{getOrganizationName(plan)}</span>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                          {plan.planner_name || 'Unknown Planner'}
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                          {formatDate(plan.submitted_at)}
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                            plan.status === 'APPROVED' ? 'bg-green-100 text-green-800' : 
-                            plan.status === 'SUBMITTED' ? 'bg-yellow-100 text-yellow-800' :
-                            'bg-red-100 text-red-800'
-                          }`}>
-                            {plan.status}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                          <div className="space-y-1">
-                            <div>Budget: ${planBudget.total.toLocaleString()}</div>
-                            <div>Funding: ${planBudget.available.toLocaleString()} ({fundingCoverage}%)</div>
-                            {planBudget.gap > 0 && (
-                              <div className="text-red-600">Gap: ${planBudget.gap.toLocaleString()}</div>
+                            Organization
+                            {reviewedSortBy === 'organization' && (
+                              <span className="ml-1">
+                                {reviewedSortOrder === 'asc' ? '↑' : '↓'}
+                              </span>
                             )}
                           </div>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                          <div className="flex items-center justify-end space-x-2">
-                            <button
-                              onClick={() => navigate(`/plans/${plan.id}`)}
-                              className="text-blue-600 hover:text-blue-900 flex items-center"
-                            >
-                              <Eye className="h-4 w-4 mr-1" />
-                              View
-                            </button>
-                            {plan.status === 'SUBMITTED' && (
-                              <button
-                                onClick={() => handleReviewPlan(plan)}
-                                className="text-green-600 hover:text-green-900 flex items-center ml-2"
-                              >
-                                Review
-                              </button>
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Planner
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Plan Type
+                        </th>
+                        <th 
+                          className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                          onClick={() => {
+                            if (reviewedSortBy === 'date') {
+                              setReviewedSortOrder(reviewedSortOrder === 'asc' ? 'desc' : 'asc');
+                            } else {
+                              setReviewedSortBy('date');
+                              setReviewedSortOrder('desc');
+                            }
+                          }}
+                        >
+                          <div className="flex items-center">
+                            Submitted Date
+                            {reviewedSortBy === 'date' && (
+                              <span className="ml-1">
+                                {reviewedSortOrder === 'asc' ? '↑' : '↓'}
+                              </span>
                             )}
                           </div>
-                        </td>
+                        </th>
+                        <th 
+                          className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                          onClick={() => {
+                            if (reviewedSortBy === 'status') {
+                              setReviewedSortOrder(reviewedSortOrder === 'asc' ? 'desc' : 'asc');
+                            } else {
+                              setReviewedSortBy('status');
+                              setReviewedSortOrder('asc');
+                            }
+                          }}
+                        >
+                          <div className="flex items-center">
+                            Status
+                            {reviewedSortBy === 'status' && (
+                              <span className="ml-1">
+                                {reviewedSortOrder === 'asc' ? '↑' : '↓'}
+                              </span>
+                            )}
+                          </div>
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Budget Analysis
+                        </th>
+                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Actions
+                        </th>
                       </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {reviewedPaginatedPlans.map((plan: any) => {
+                        const budget = calculatePlanBudget(plan);
+                        const fundingCoverage = budget.total > 0 ? (budget.totalFunding / budget.total) * 100 : 0;
+                        
+                        return (
+                          <tr key={plan.id} className="hover:bg-gray-50">
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <div className="flex items-center">
+                                <Building2 className="h-5 w-5 text-gray-400 mr-2" />
+                                <span className="text-sm font-medium text-gray-900">
+                                  {getOrganizationName(plan)}
+                                </span>
+                              </div>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                              {plan.planner_name || 'Unknown Planner'}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                              {plan.type || 'N/A'}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                              {plan.submitted_at ? formatDate(plan.submitted_at) : 'Not submitted'}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                                plan.status === 'APPROVED' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                              }`}>
+                                {plan.status}
+                              </span>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <div className="text-sm">
+                                <div className="font-medium text-gray-900">
+                                  {formatCurrency(budget.total)}
+                                </div>
+                                <div className="text-gray-500">
+                                  Funding: {fundingCoverage.toFixed(1)}%
+                                </div>
+                                <div className="text-xs text-gray-400">
+                                  Gap: {formatCurrency(budget.gap)}
+                                </div>
+                              </div>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                              <button
+                                onClick={() => navigate(`/plans/${plan.id}`)}
+                                className="text-blue-600 hover:text-blue-900 flex items-center"
+                              >
+                                <Eye className="h-4 w-4 mr-1" />
+                                View
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Pagination for Reviewed Plans */}
+                {reviewedTotalPages > 1 && (
+                  <div className="flex items-center justify-between border-t border-gray-200 bg-white px-4 py-3 sm:px-6">
+                    <div className="flex flex-1 justify-between sm:hidden">
+                      <button
+                        onClick={() => setReviewedCurrentPage(Math.max(1, reviewedCurrentPage - 1))}
+                        disabled={reviewedCurrentPage === 1}
+                        className="relative inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                      >
+                        Previous
+                      </button>
+                      <button
+                        onClick={() => setReviewedCurrentPage(Math.min(reviewedTotalPages, reviewedCurrentPage + 1))}
+                        disabled={reviewedCurrentPage === reviewedTotalPages}
+                        className="relative ml-3 inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                      >
+                        Next
+                      </button>
+                    </div>
+                    <div className="hidden sm:flex sm:flex-1 sm:items-center sm:justify-between">
+                      <div>
+                        <p className="text-sm text-gray-700">
+                          Showing <span className="font-medium">{reviewedStartIndex + 1}</span> to{' '}
+                          <span className="font-medium">
+                            {Math.min(reviewedStartIndex + reviewedItemsPerPage, filteredReviewedPlans.length)}
+                          </span>{' '}
+                          of <span className="font-medium">{filteredReviewedPlans.length}</span> results
+                        </p>
+                      </div>
+                      <div>
+                        <nav className="isolate inline-flex -space-x-px rounded-md shadow-sm" aria-label="Pagination">
+                          <button
+                            onClick={() => setReviewedCurrentPage(Math.max(1, reviewedCurrentPage - 1))}
+                            disabled={reviewedCurrentPage === 1}
+                            className="relative inline-flex items-center rounded-l-md px-2 py-2 text-gray-400 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 focus:z-20 focus:outline-offset-0 disabled:opacity-50"
+                          >
+                            <ChevronLeft className="h-5 w-5" />
+                          </button>
+                          {Array.from({ length: Math.min(5, reviewedTotalPages) }, (_, i) => {
+                            const pageNum = i + 1;
+                            return (
+                              <button
+                                key={pageNum}
+                                onClick={() => setReviewedCurrentPage(pageNum)}
+                                className={`relative inline-flex items-center px-4 py-2 text-sm font-semibold ${
+                                  pageNum === reviewedCurrentPage
+                                    ? 'z-10 bg-blue-600 text-white focus:z-20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600'
+                                    : 'text-gray-900 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 focus:z-20 focus:outline-offset-0'
+                                }`}
+                              >
+                                {pageNum}
+                              </button>
+                            );
+                          })}
+                          <button
+                            onClick={() => setReviewedCurrentPage(Math.min(reviewedTotalPages, reviewedCurrentPage + 1))}
+                            disabled={reviewedCurrentPage === reviewedTotalPages}
+                            className="relative inline-flex items-center rounded-r-md px-2 py-2 text-gray-400 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 focus:z-20 focus:outline-offset-0 disabled:opacity-50"
+                          >
+                            <ChevronRight className="h-5 w-5" />
+                          </button>
+                        </nav>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Budget by Activity Tab */}
+      {activeTab === 'budget-activity' && (
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+          <div className="p-6">
+            <div className="flex justify-between items-center mb-6">
+              <div>
+                <h3 className="text-lg font-medium leading-6 text-gray-900">Budget by Activity Type</h3>
+                <p className="mt-1 text-sm text-gray-500">
+                  Activity counts and budgets by organization
+                </p>
+              </div>
             </div>
 
-            {/* Pagination for Reviewed Plans */}
-            <div className="flex items-center justify-between mt-6">
-              <div className="text-sm text-gray-700">
-                Showing {((currentPage - 1) * itemsPerPage) + 1} to {Math.min(currentPage * itemsPerPage, filteredPlans.length)} of {filteredPlans.length} plans
+            {budgetByActivityData.length === 0 ? (
+              <div className="text-center py-12 bg-gray-50 rounded-lg border-2 border-dashed border-gray-200">
+                <BarChart3 className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+                <h3 className="text-lg font-medium text-gray-900 mb-1">No activity data found</h3>
+                <p className="text-gray-500">No budget activities have been recorded yet.</p>
               </div>
-              <div className="flex items-center space-x-2">
-                <button
-                  onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
-                  disabled={currentPage === 1}
-                  className="px-3 py-1 border border-gray-300 rounded-md disabled:opacity-50 hover:bg-gray-50"
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                </button>
-                <span className="px-3 py-1 text-sm text-gray-700">
-                  Page {currentPage} of {getTotalPages(filteredPlans.length)}
-                </span>
-                <button
-                  onClick={() => setCurrentPage(Math.min(getTotalPages(filteredPlans.length), currentPage + 1))}
-                  disabled={currentPage === getTotalPages(filteredPlans.length)}
-                  className="px-3 py-1 border border-gray-300 rounded-md disabled:opacity-50 hover:bg-gray-50"
-                >
-                  <ChevronRight className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
+            ) : (
+              <>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Organization Name
+                        </th>
+                        <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Training
+                        </th>
+                        <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Meeting
+                        </th>
+                        <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Workshop
+                        </th>
+                        <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Procurement
+                        </th>
+                        <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Printing
+                        </th>
+                        <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Other
+                        </th>
+                        <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Total Count
+                        </th>
+                        <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Total Budget
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {budgetActivityPaginatedData.map((orgData: any, index) => (
+                        <tr key={index} className="hover:bg-gray-50">
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <div className="flex items-center">
+                              <Building2 className="h-5 w-5 text-gray-400 mr-2" />
+                              <span className="text-sm font-medium text-gray-900">
+                                {orgData.organizationName}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-center">
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                              {orgData.Training.count}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-center">
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                              {orgData.Meeting.count}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-center">
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
+                              {orgData.Workshop.count}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-center">
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-teal-100 text-teal-800">
+                              {orgData.Procurement.count}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-center">
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-pink-100 text-pink-800">
+                              {orgData.Printing.count}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-center">
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                              {orgData.Other.count}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-center">
+                            <span className="text-sm font-medium text-gray-900">
+                              {orgData.totalCount}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-center">
+                            <span className="text-sm font-medium text-green-600">
+                              {formatCurrency(orgData.totalBudget)}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Pagination for Budget by Activity */}
+                {budgetActivityTotalPages > 1 && (
+                  <div className="flex items-center justify-between border-t border-gray-200 bg-white px-4 py-3 sm:px-6">
+                    <div className="flex flex-1 justify-between sm:hidden">
+                      <button
+                        onClick={() => setBudgetActivityCurrentPage(Math.max(1, budgetActivityCurrentPage - 1))}
+                        disabled={budgetActivityCurrentPage === 1}
+                        className="relative inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                      >
+                        Previous
+                      </button>
+                      <button
+                        onClick={() => setBudgetActivityCurrentPage(Math.min(budgetActivityTotalPages, budgetActivityCurrentPage + 1))}
+                        disabled={budgetActivityCurrentPage === budgetActivityTotalPages}
+                        className="relative ml-3 inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                      >
+                        Next
+                      </button>
+                    </div>
+                    <div className="hidden sm:flex sm:flex-1 sm:items-center sm:justify-between">
+                      <div>
+                        <p className="text-sm text-gray-700">
+                          Showing <span className="font-medium">{budgetActivityStartIndex + 1}</span> to{' '}
+                          <span className="font-medium">
+                            {Math.min(budgetActivityStartIndex + budgetActivityItemsPerPage, budgetByActivityData.length)}
+                          </span>{' '}
+                          of <span className="font-medium">{budgetByActivityData.length}</span> results
+                        </p>
+                      </div>
+                      <div>
+                        <nav className="isolate inline-flex -space-x-px rounded-md shadow-sm">
+                          <button
+                            onClick={() => setBudgetActivityCurrentPage(Math.max(1, budgetActivityCurrentPage - 1))}
+                            disabled={budgetActivityCurrentPage === 1}
+                            className="relative inline-flex items-center rounded-l-md px-2 py-2 text-gray-400 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 disabled:opacity-50"
+                          >
+                            <ChevronLeft className="h-5 w-5" />
+                          </button>
+                          {Array.from({ length: Math.min(5, budgetActivityTotalPages) }, (_, i) => {
+                            const pageNum = i + 1;
+                            return (
+                              <button
+                                key={pageNum}
+                                onClick={() => setBudgetActivityCurrentPage(pageNum)}
+                                className={`relative inline-flex items-center px-4 py-2 text-sm font-semibold ${
+                                  pageNum === budgetActivityCurrentPage
+                                    ? 'z-10 bg-blue-600 text-white'
+                                    : 'text-gray-900 ring-1 ring-inset ring-gray-300 hover:bg-gray-50'
+                                }`}
+                              >
+                                {pageNum}
+                              </button>
+                            );
+                          })}
+                          <button
+                            onClick={() => setBudgetActivityCurrentPage(Math.min(budgetActivityTotalPages, budgetActivityCurrentPage + 1))}
+                            disabled={budgetActivityCurrentPage === budgetActivityTotalPages}
+                            className="relative inline-flex items-center rounded-r-md px-2 py-2 text-gray-400 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 disabled:opacity-50"
+                          >
+                            <ChevronRight className="h-5 w-5" />
+                          </button>
+                        </nav>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         </div>
       )}
@@ -1539,97 +1660,159 @@ const AdminDashboard: React.FC = () => {
         <div className="space-y-8">
           {/* Complete Budget Overview by Executives - Colorful Chart */}
           <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
-            <h3 className="text-xl font-bold text-gray-900 mb-6">Complete Budget Overview by Executives</h3>
-            <div className="h-96">
-              <Bar 
-                data={budgetOverviewChartData}
-                options={{
-                  maintainAspectRatio: false,
-                  responsive: true,
-                  plugins: {
-                    legend: {
-                      position: 'top' as const,
-                    },
-                    title: {
-                      display: true,
-                      text: 'Budget Analysis by Organization (Capable of 30-50 Organizations)'
-                    }
-                  },
-                  scales: {
-                    x: {
-                      ticks: {
-                        maxRotation: 45,
-                        minRotation: 45
-                      }
-                    },
-                    y: {
-                      beginAtZero: true,
+            <h3 className="text-lg font-medium text-gray-900 mb-4 flex items-center">
+              <BarChart3 className="h-5 w-5 mr-2 text-blue-600" />
+              Complete Budget Overview by Executives
+            </h3>
+            <p className="text-sm text-gray-600 mb-6">
+              Budget analysis for organizations with submitted and approved plans
+            </p>
+            {completeBudgetOverview.length === 0 ? (
+              <div className="text-center py-12 bg-gray-50 rounded-lg border-2 border-dashed border-gray-200">
+                <BarChart3 className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+                <h3 className="text-lg font-medium text-gray-900 mb-1">No budget data available</h3>
+                <p className="text-gray-500">No organizations have submitted or approved plans with budget data.</p>
+              </div>
+            ) : (
+              <div className="h-96">
+                <Bar 
+                  data={completeBudgetChartData}
+                  options={{
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                      legend: {
+                        position: 'top' as const,
+                      },
                       title: {
                         display: true,
-                        text: 'Amount ($)'
+                        text: `Budget Overview - ${completeBudgetOverview.length} Organizations`
                       }
+                    },
+                    scales: {
+                      x: {
+                        title: {
+                          display: true,
+                          text: 'Organizations'
+                        },
+                        ticks: {
+                          maxRotation: 45,
+                          minRotation: 45
+                        }
+                      },
+                      y: {
+                        title: {
+                          display: true,
+                          text: 'Budget Amount ($)'
+                        },
+                        ticks: {
+                          callback: function(value) {
+                            return '$' + Number(value).toLocaleString();
+                          }
+                        }
+                      }
+                    },
+                    interaction: {
+                      intersect: false,
+                      mode: 'index' as const
                     }
-                  }
-                }}
-              />
-            </div>
+                  }}
+                />
+              </div>
+            )}
           </div>
 
           {/* Other Analytics Charts */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Plan Status Distribution */}
             <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
-              <h3 className="text-lg font-medium text-gray-900 mb-4">Plan Status Distribution</h3>
+              <h3 className="text-lg font-medium text-gray-900 mb-4 flex items-center">
+                <PieChart className="h-5 w-5 mr-2 text-blue-600" />
+                Plan Status Distribution
+              </h3>
               <div className="h-64">
-                <Doughnut data={planStatusData} options={{ maintainAspectRatio: false }} />
+                <Doughnut 
+                  data={planStatusChartData}
+                  options={{
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                      legend: {
+                        position: 'bottom' as const,
+                      }
+                    }
+                  }}
+                />
               </div>
             </div>
 
+            {/* Budget & Funding Distribution */}
             <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
-              <h3 className="text-lg font-medium text-gray-900 mb-4">Budget & Funding Distribution</h3>
+              <h3 className="text-lg font-medium text-gray-900 mb-4 flex items-center">
+                <DollarSign className="h-5 w-5 mr-2 text-green-600" />
+                Budget & Funding Distribution
+              </h3>
               <div className="h-64">
-                <Doughnut data={budgetDistributionData} options={{ maintainAspectRatio: false }} />
+                <Doughnut 
+                  data={budgetDistributionChartData}
+                  options={{
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                      legend: {
+                        position: 'bottom' as const,
+                      }
+                    }
+                  }}
+                />
               </div>
             </div>
           </div>
 
+          {/* Monthly Submission Trends */}
           <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
-            <h3 className="text-lg font-medium text-gray-900 mb-4">Monthly Submission Trends</h3>
+            <h3 className="text-lg font-medium text-gray-900 mb-4 flex items-center">
+              <TrendingUp className="h-5 w-5 mr-2 text-purple-600" />
+              Monthly Submission Trends
+            </h3>
             <div className="h-80">
               <Line 
-                data={monthlyTrendsData} 
+                data={monthlyTrendsChartData}
                 options={{
+                  responsive: true,
                   maintainAspectRatio: false,
+                  interaction: {
+                    mode: 'index' as const,
+                    intersect: false,
+                  },
                   scales: {
-                    y: {
-                      type: 'linear',
+                    x: {
                       display: true,
-                      position: 'left',
-                      title: { display: true, text: 'Number of Plans' }
+                      title: {
+                        display: true,
+                        text: 'Month'
+                      }
+                    },
+                    y: {
+                      type: 'linear' as const,
+                      display: true,
+                      position: 'left' as const,
+                      title: {
+                        display: true,
+                        text: 'Number of Submissions'
+                      }
                     },
                     y1: {
-                      type: 'linear',
+                      type: 'linear' as const,
                       display: true,
-                      position: 'right',
-                      title: { display: true, text: 'Budget (Millions)' },
-                      grid: { drawOnChartArea: false }
-                    }
-                  }
-                }}
-              />
-            </div>
-          </div>
-
-          <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
-            <h3 className="text-lg font-medium text-gray-900 mb-4">Top Organizations by Plan Activity</h3>
-            <div className="h-80">
-              <Bar 
-                data={topOrganizationsData} 
-                options={{
-                  maintainAspectRatio: false,
-                  scales: {
-                    y: {
-                      beginAtZero: true,
-                      title: { display: true, text: 'Number of Plans' }
+                      position: 'right' as const,
+                      title: {
+                        display: true,
+                        text: 'Budget Amount ($)'
+                      },
+                      grid: {
+                        drawOnChartArea: false,
+                      },
                     }
                   }
                 }}
@@ -1641,120 +1824,179 @@ const AdminDashboard: React.FC = () => {
 
       {/* Executive Performance Tab */}
       {activeTab === 'executive-performance' && (
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
           <div className="p-6">
-            <h3 className="text-lg font-medium text-gray-900 mb-6">Executive Performance Overview</h3>
-            
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Organization Name</th>
-                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Total Plans</th>
-                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Approved</th>
-                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Submitted</th>
-                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Total Budget</th>
-                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Available Funding</th>
-                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Government Budget</th>
-                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">SDG Budget</th>
-                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Partners Budget</th>
-                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Funding Gap</th>
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {paginatedExecutivePerformance.map((row: any, index: number) => (
-                    <tr key={index} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="flex items-center">
-                          <Building2 className="h-5 w-5 text-gray-400 mr-2" />
-                          <span className="text-sm font-medium text-gray-900">{row.organizationName}</span>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-center text-sm text-gray-900">{row.totalPlans}</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-center">
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                          {row.approved}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-center">
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
-                          {row.submitted}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-center text-sm font-medium text-gray-900">
-                        ${row.totalBudget.toLocaleString()}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-center text-sm font-medium text-green-600">
-                        ${row.availableFunding.toLocaleString()}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-center text-sm text-blue-600">
-                        ${row.governmentBudget.toLocaleString()}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-center text-sm text-purple-600">
-                        ${row.sdgBudget.toLocaleString()}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-center text-sm text-orange-600">
-                        ${row.partnersBudget.toLocaleString()}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-center text-sm font-medium">
-                        {row.fundingGap > 0 ? (
-                          <span className="text-red-600">${row.fundingGap.toLocaleString()}</span>
-                        ) : (
-                          <span className="text-green-600">Fully Funded</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Pagination for Executive Performance */}
-            <div className="flex items-center justify-between mt-6">
-              <div className="text-sm text-gray-700">
-                Showing {((executivePage - 1) * itemsPerPage) + 1} to {Math.min(executivePage * itemsPerPage, executivePerformance.length)} of {executivePerformance.length} organizations
-              </div>
-              <div className="flex items-center space-x-2">
-                <button
-                  onClick={() => setExecutivePage(Math.max(1, executivePage - 1))}
-                  disabled={executivePage === 1}
-                  className="px-3 py-1 border border-gray-300 rounded-md disabled:opacity-50 hover:bg-gray-50"
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                </button>
-                <span className="px-3 py-1 text-sm text-gray-700">
-                  Page {executivePage} of {getTotalPages(executivePerformance.length)}
-                </span>
-                <button
-                  onClick={() => setExecutivePage(Math.min(getTotalPages(executivePerformance.length), executivePage + 1))}
-                  disabled={executivePage === getTotalPages(executivePerformance.length)}
-                  className="px-3 py-1 border border-gray-300 rounded-md disabled:opacity-50 hover:bg-gray-50"
-                >
-                  <ChevronRight className="h-4 w-4" />
-                </button>
+            <div className="flex justify-between items-center mb-6">
+              <div>
+                <h3 className="text-lg font-medium leading-6 text-gray-900">Executive Performance Overview</h3>
+                <p className="mt-1 text-sm text-gray-500">
+                  Comprehensive performance metrics for all executive organizations
+                </p>
               </div>
             </div>
-          </div>
-        </div>
-      )}
 
-      {/* Review Modal */}
-      {showReviewModal && selectedPlan && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg p-6 max-w-md w-full">
-            <h3 className="text-lg font-medium text-gray-900 mb-4">
-              Review Plan: {getOrganizationName(selectedPlan)}
-            </h3>
-            
-            <PlanReviewForm
-              plan={selectedPlan}
-              onSubmit={handleReviewSubmit}
-              onCancel={() => {
-                setShowReviewModal(false);
-                setSelectedPlan(null);
-              }}
-              isSubmitting={reviewMutation.isPending}
-            />
+            {executivePerformanceData.length === 0 ? (
+              <div className="text-center py-12 bg-gray-50 rounded-lg border-2 border-dashed border-gray-200">
+                <Briefcase className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+                <h3 className="text-lg font-medium text-gray-900 mb-1">No performance data available</h3>
+                <p className="text-gray-500">No executive performance data has been recorded yet.</p>
+              </div>
+            ) : (
+              <>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Organization Name
+                        </th>
+                        <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Total Plans
+                        </th>
+                        <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Approved
+                        </th>
+                        <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Submitted
+                        </th>
+                        <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Total Budget
+                        </th>
+                        <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Available Funding
+                        </th>
+                        <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Government Budget
+                        </th>
+                        <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          SDG Budget
+                        </th>
+                        <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Partners Budget
+                        </th>
+                        <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Funding Gap
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {executivePaginatedData.map((execData: any, index) => (
+                        <tr key={index} className="hover:bg-gray-50">
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <div className="flex items-center">
+                              <Building2 className="h-5 w-5 text-gray-400 mr-2" />
+                              <span className="text-sm font-medium text-gray-900">
+                                {execData.organizationName}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-center text-sm text-gray-900">
+                            {execData.totalPlans}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-center">
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                              {execData.approved}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-center">
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+                              {execData.submitted}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-center text-sm font-medium text-gray-900">
+                            {formatCurrency(execData.totalBudget)}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-center text-sm font-medium text-green-600">
+                            {formatCurrency(execData.availableFunding)}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-center text-sm font-medium text-blue-600">
+                            {formatCurrency(execData.governmentBudget)}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-center text-sm font-medium text-purple-600">
+                            {formatCurrency(execData.sdgBudget)}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-center text-sm font-medium text-orange-600">
+                            {formatCurrency(execData.partnersBudget)}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-center text-sm font-medium">
+                            <span className={execData.fundingGap > 0 ? 'text-red-600' : 'text-green-600'}>
+                              {formatCurrency(execData.fundingGap)}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Pagination for Executive Performance */}
+                {executiveTotalPages > 1 && (
+                  <div className="flex items-center justify-between border-t border-gray-200 bg-white px-4 py-3 sm:px-6">
+                    <div className="flex flex-1 justify-between sm:hidden">
+                      <button
+                        onClick={() => setExecutiveCurrentPage(Math.max(1, executiveCurrentPage - 1))}
+                        disabled={executiveCurrentPage === 1}
+                        className="relative inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                      >
+                        Previous
+                      </button>
+                      <button
+                        onClick={() => setExecutiveCurrentPage(Math.min(executiveTotalPages, executiveCurrentPage + 1))}
+                        disabled={executiveCurrentPage === executiveTotalPages}
+                        className="relative ml-3 inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                      >
+                        Next
+                      </button>
+                    </div>
+                    <div className="hidden sm:flex sm:flex-1 sm:items-center sm:justify-between">
+                      <div>
+                        <p className="text-sm text-gray-700">
+                          Showing <span className="font-medium">{executiveStartIndex + 1}</span> to{' '}
+                          <span className="font-medium">
+                            {Math.min(executiveStartIndex + executiveItemsPerPage, executivePerformanceData.length)}
+                          </span>{' '}
+                          of <span className="font-medium">{executivePerformanceData.length}</span> results
+                        </p>
+                      </div>
+                      <div>
+                        <nav className="isolate inline-flex -space-x-px rounded-md shadow-sm">
+                          <button
+                            onClick={() => setExecutiveCurrentPage(Math.max(1, executiveCurrentPage - 1))}
+                            disabled={executiveCurrentPage === 1}
+                            className="relative inline-flex items-center rounded-l-md px-2 py-2 text-gray-400 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 disabled:opacity-50"
+                          >
+                            <ChevronLeft className="h-5 w-5" />
+                          </button>
+                          {Array.from({ length: Math.min(5, executiveTotalPages) }, (_, i) => {
+                            const pageNum = i + 1;
+                            return (
+                              <button
+                                key={pageNum}
+                                onClick={() => setExecutiveCurrentPage(pageNum)}
+                                className={`relative inline-flex items-center px-4 py-2 text-sm font-semibold ${
+                                  pageNum === executiveCurrentPage
+                                    ? 'z-10 bg-blue-600 text-white'
+                                    : 'text-gray-900 ring-1 ring-inset ring-gray-300 hover:bg-gray-50'
+                                }`}
+                              >
+                                {pageNum}
+                              </button>
+                            );
+                          })}
+                          <button
+                            onClick={() => setExecutiveCurrentPage(Math.min(executiveTotalPages, executiveCurrentPage + 1))}
+                            disabled={executiveCurrentPage === executiveTotalPages}
+                            className="relative inline-flex items-center rounded-r-md px-2 py-2 text-gray-400 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 disabled:opacity-50"
+                          >
+                            <ChevronRight className="h-5 w-5" />
+                          </button>
+                        </nav>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         </div>
       )}
