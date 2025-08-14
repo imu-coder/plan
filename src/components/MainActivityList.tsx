@@ -355,30 +355,6 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
     }
   };
 
-  // Check if activities data is valid
-  if (!Array.isArray(safeActivitiesData)) {
-    console.warn('MainActivityList: Activities data is not an array:', activitiesData);
-  }
-
-  // Filter activities based on user organization with better logging
-  const filteredActivities = safeActivitiesData.filter(activity => {
-    if (!activity) {
-      console.log('MainActivityList: Skipping null/undefined activity');
-      return false;
-    }
-    
-    // More permissive filtering - show if no organization set OR belongs to user org
-    const hasNoOrg = !activity.organization;
-    const belongsToUserOrg = activity.organization === userOrgId;
-    const shouldShow = hasNoOrg || belongsToUserOrg;
-    
-    console.log(`MainActivityList: Activity "${activity.name}": org=${activity.organization}, userOrg=${userOrgId}, hasNoOrg=${hasNoOrg}, belongsToUserOrg=${belongsToUserOrg}, shouldShow=${shouldShow}`);
-    
-    return shouldShow;
-  });
-
-  console.log(`MainActivityList: Final result - showing ${filteredActivities.length} of ${safeActivitiesData.length} activities for initiative ${initiativeId}`);
-
   // Calculate weight totals
   const totalActivitiesWeight = filteredActivities.reduce((sum, activity) => 
     sum + (Number(activity.weight) || 0), 0
