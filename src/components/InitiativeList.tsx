@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { initiatives, auth } from '../lib/api';
 import { BarChart3, AlertCircle, CheckCircle, Edit, Trash2, Lock, PlusCircle, Building2, Info } from 'lucide-react';
@@ -30,7 +30,6 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
   planKey = 'default',
   isUserPlanner,
   userOrgId,
-  
 }) => {
   const { t } = useLanguage();
   const queryClient = useQueryClient();
@@ -46,8 +45,21 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
     customWeight: selectedObjectiveData?.effective_weight || selectedObjectiveData?.planner_weight
   });
 
+  // Force refresh function for external use
+  const forceRefresh = () => {
+    console.log('Force refreshing initiatives list');
+    queryClient.invalidateQueries({ queryKey: ['initiatives'] });
+    setRefreshTrigger(prev => prev + 1);
+  };
+
+  // Listen for initiative updates from parent component
+  useEffect(() => {
+    console.log('InitiativeList: planKey changed, refreshing data');
+    setRefreshTrigger(prev => prev + 1);
+  }, [planKey]);
+
   // Fetch all initiatives based on parent type
-  const { data: initiativesList, isLoading } = useQuery({
+  const { data: initiativesList, isLoading, refetch } = useQuery({
     queryKey: ['initiatives', parentId, parentType, planKey, refreshTrigger],
     queryFn: async () => {
       if (!parentId) {
@@ -89,19 +101,6 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
       setRefreshTrigger(prev => prev + 1);
     }
   });
-
-  // Force refresh function for external use
-  const forceRefresh = () => {
-    console.log('Force refreshing initiatives list');
-    queryClient.invalidateQueries({ queryKey: ['initiatives'] });
-    setRefreshTrigger(prev => prev + 1);
-  };
-
-  // Listen for initiative updates from parent component
-  useEffect(() => {
-    console.log('InitiativeList: planKey changed, refreshing data');
-    setRefreshTrigger(prev => prev + 1);
-  }, [planKey]);
 
   // Handle initiative deletion
   const handleDeleteInitiative = (initiativeId: string, e: React.MouseEvent) => {
@@ -211,8 +210,7 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
     : total_initiatives_weight <= parentWeight;
 
   // Group initiatives by default vs custom
-  const defaultInitiatives = initiativesList.data.filter(i => i.is_default);
-  // Filter custom initiatives to only show those belonging to the user's organization or default ones
+  const defaultInitiatives = filteredInitiatives.filter(i => i.is_default);
   const customInitiatives = filteredInitiatives.filter(i => !i.is_default);
 
   console.log('Default initiatives:', defaultInitiatives.length);
@@ -226,12 +224,8 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
     filteredInitiativesCount: filteredInitiatives.length
   });
 
-  // Check if the total weight exactly matches the parent weight (for objectives)
-  const isWeightComplete = parentType === 'objective' 
-    ? Math.abs(total_initiatives_weight - parentWeight) < 0.01
-    : total_initiatives_weight >= parentWeight;
   // If there are no initiatives yet, show empty state
-  if (initiativesList.data.length === 0) {
+  if (filteredInitiatives.length === 0) {
     return (
       <div className="space-y-4">
         <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
@@ -365,6 +359,21 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
                 ? `Weight distribution is balanced at exactly ${parentWeight}% (custom weight)` 
                 : 'Weight distribution is valid'}
             </p>
+          </div>
+        )}
+
+        {/* Validation Messages */}
+        {validationSuccess && (
+          <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded-md flex items-center gap-2 text-green-700">
+            <CheckCircle className="h-5 w-5" />
+            <p className="text-sm">{validationSuccess}</p>
+          </div>
+        )}
+
+        {validationError && (
+          <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-md flex items-center gap-2 text-red-700">
+            <AlertCircle className="h-5 w-5" />
+            <p className="text-sm">{validationError}</p>
           </div>
         )}
 
@@ -565,7 +574,7 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
             className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <PlusCircle className="h-4 w-4 mr-2" />
-            {initiativesList.data.length === 0 ? 'Create First Initiative' : 
+            {filteredInitiatives.length === 0 ? 'Create First Initiative' : 
              remaining_weight <= 0.01 ? `No Weight Available (${remaining_weight.toFixed(1)}%)` :
              'Create New Initiative'}
           </button>
