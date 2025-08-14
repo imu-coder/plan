@@ -1,14 +1,18 @@
 import React, { useEffect, useState } from 'react';
-import { useForm, Controller } from 'react-hook-form';
-import { Calculator, DollarSign, Info, AlertCircle } from 'lucide-react';
+import { useForm, useFieldArray, Controller } from 'react-hook-form';
+import { Calculator, DollarSign, Info, Plus, Trash2, AlertCircle } from 'lucide-react';
 import type { SupervisionCost, TrainingLocation } from '../types/costing';
 import { locations, perDiems, accommodations, supervisorCosts, landTransports, airTransports } from '../lib/api';
-import { Plus, Trash2 } from 'lucide-react';
 
 // Fallback data if API fails
 const FALLBACK_LOCATIONS = [
   { id: 'fallback-1', name: 'Addis Ababa', region: 'Addis Ababa', is_hardship_area: false },
   { id: 'fallback-2', name: 'Adama', region: 'Oromia', is_hardship_area: false }
+];
+
+const FALLBACK_SUPERVISOR_COSTS = [
+  { id: 'fallback-1', cost_type: 'MOBILE_CARD_300', cost_type_display: 'Mobile Card (300 birr)', amount: 300 },
+  { id: 'fallback-2', cost_type: 'STATIONARY', cost_type_display: 'Stationary (Writing Pad and Pen)', amount: 200 }
 ];
 
 interface TransportRoute {
@@ -33,14 +37,6 @@ interface SupervisionCostingToolProps {
   onCancel: () => void;
   initialData?: SupervisionCost;
 }
-
-const SUPERVISOR_COSTS = [
-  { value: 'ALL', label: 'All Additional Costs' },
-  { value: 'TRAINING_MATERIALS', label: 'Training Materials' },
-  { value: 'EQUIPMENT', label: 'Equipment' },
-  { value: 'COMMUNICATION', label: 'Communication' },
-  { value: 'OTHER', label: 'Other' }
-];
 
 const SupervisionCostingTool: React.FC<SupervisionCostingToolProps> = ({ 
   onCalculate,
@@ -67,6 +63,7 @@ const SupervisionCostingTool: React.FC<SupervisionCostingToolProps> = ({
       numberOfDays: 1,
       numberOfSupervisors: 1,
       numberOfSessions: 1,
+      location: '',
       numberOfSupervisorsWithAdditionalCost: 0,
       additionalSupervisorCosts: [],
       transportRequired: false,
@@ -79,17 +76,118 @@ const SupervisionCostingTool: React.FC<SupervisionCostingToolProps> = ({
   // Watch all form values at once
   const allFormValues = watch();
 
-  // ... existing functions ...
+  // Get API base URL
+  useEffect(() => {
+    const apiUrl = import.meta.env.VITE_API_URL || '';
+    setApiBaseUrl(apiUrl.endsWith('/') ? apiUrl.slice(0, -1) : apiUrl);
+    console.log('API Base URL for supervision tool:', apiUrl);
+  }, []);
+
+  // Fetch all required data from database
+  useEffect(() => {
+    const fetchAllData = async () => {
+      try {
+        setIsLoading(true);
+        setError(null);
+        
+        console.log('Fetching supervision costing data...');
+        
+        // Fetch all data in parallel
+        const [
+          locationsResponse,
+          perDiemsResponse,
+          accommodationsResponse,
+          supervisorCostsResponse,
+          landTransportsResponse,
+          airTransportsResponse
+        ] = await Promise.all([
+          locations.getAll().catch(err => {
+            console.error('Failed to fetch locations:', err);
+            return { data: FALLBACK_LOCATIONS };
+          }),
+          perDiems.getAll().catch(err => {
+            console.error('Failed to fetch per diems:', err);
+            return { data: [] };
+          }),
+          accommodations.getAll().catch(err => {
+            console.error('Failed to fetch accommodations:', err);
+            return { data: [] };
+          }),
+          supervisorCosts.getAll().catch(err => {
+            console.error('Failed to fetch supervisor costs:', err);
+            return { data: FALLBACK_SUPERVISOR_COSTS };
+          }),
+          landTransports.getAll().catch(err => {
+            console.error('Failed to fetch land transports:', err);
+            return { data: [] };
+          }),
+          airTransports.getAll().catch(err => {
+            console.error('Failed to fetch air transports:', err);
+            return { data: [] };
+          })
+        ]);
+
+        // Set all data
+        setLocationsData(locationsResponse?.data || FALLBACK_LOCATIONS);
+        setPerDiemsData(perDiemsResponse?.data || []);
+        setAccommodationsData(accommodationsResponse?.data || []);
+        setSupervisorCostsData(supervisorCostsResponse?.data || FALLBACK_SUPERVISOR_COSTS);
+        setLandTransportsData(landTransportsResponse?.data || []);
+        setAirTransportsData(airTransportsResponse?.data || []);
+
+        console.log('Successfully loaded supervision costing data:', {
+          locations: locationsResponse?.data?.length || 0,
+          perDiems: perDiemsResponse?.data?.length || 0,
+          accommodations: accommodationsResponse?.data?.length || 0,
+          supervisorCosts: supervisorCostsResponse?.data?.length || 0,
+          landTransports: landTransportsResponse?.data?.length || 0,
+          airTransports: airTransportsResponse?.data?.length || 0
+        });
+
+        // Set default location if available
+        if (locationsResponse?.data?.length > 0 && !initialData?.location) {
+          setValue('location', locationsResponse.data[0].id);
+        }
+
+        // Initialize additional locations if provided in initial data
+        if (initialData?.additionalLocations && Array.isArray(initialData.additionalLocations)) {
+          setAdditionalLocations(initialData.additionalLocations);
+        }
+
+        // Initialize transport routes if provided in initial data
+        if (initialData?.landTransportRoutes && Array.isArray(initialData.landTransportRoutes)) {
+          setLandTransportRoutes(initialData.landTransportRoutes);
+        }
+        if (initialData?.airTransportRoutes && Array.isArray(initialData.airTransportRoutes)) {
+          setAirTransportRoutes(initialData.airTransportRoutes);
+        }
+
+      } catch (error) {
+        console.error('Failed to fetch supervision costing data:', error);
+        setError('Failed to load costing data from database. Using fallback values.');
+        
+        // Use fallback data
+        setLocationsData(FALLBACK_LOCATIONS);
+        setSupervisorCostsData(FALLBACK_SUPERVISOR_COSTS);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchAllData();
+  }, [setValue, initialData]);
 
   // Calculate average transport costs
   const calculateAvgLandTransportCost = () => {
     if (!landTransportsData || landTransportsData.length === 0) return 1000;
-    return 1000;
+    const total = landTransportsData.reduce((sum, transport) => sum + Number(transport.price || 0), 0);
+    return total / landTransportsData.length;
   };
 
   const calculateAvgAirTransportCost = () => {
     if (!airTransportsData || airTransportsData.length === 0) return 5000;
-    return 5000;
+    const total = airTransportsData.reduce((sum, transport) => sum + Number(transport.price || 0), 0);
+    return total / airTransportsData.length;
   };
 
   // Memoize these values to avoid recalculating on every render
@@ -113,21 +211,43 @@ const SupervisionCostingTool: React.FC<SupervisionCostingToolProps> = ({
       
       let totalCost = 0;
       
-      // Per diem costs
-      const perDiemData = perDiemsData.find(pd => pd.location === locationId);
-      if (perDiemData) {
-        const perDiemCost = Number(perDiemData.amount) || 0;
-        totalCost += perDiemCost * supervisors * days;
+      // Main location costs
+      if (locationId) {
+        // Per diem costs
+        const perDiemData = perDiemsData.find(pd => pd.location == locationId);
+        if (perDiemData) {
+          const perDiemCost = Number(perDiemData.amount) || 0;
+          const hardshipAllowance = Number(perDiemData.hardship_allowance_amount) || 0;
+          totalCost += (perDiemCost + hardshipAllowance) * supervisors * days;
+        }
+        
+        // Accommodation costs
+        const accommodationData = accommodationsData.find(acc => 
+          acc.location == locationId && acc.service_type === 'FULL_BOARD'
+        );
+        if (accommodationData) {
+          const accommodationCost = Number(accommodationData.price) || 0;
+          totalCost += accommodationCost * supervisors * days;
+        }
       }
       
-      // Accommodation costs
-      const accommodationData = accommodationsData.find(acc => 
-        acc.location === locationId && acc.service_type === 'FULL_BOARD'
-      );
-      if (accommodationData) {
-        const accommodationCost = Number(accommodationData.price) || 0;
-        totalCost += accommodationCost * supervisors * days;
-      }
+      // Additional locations costs
+      additionalLocations.forEach(addLocation => {
+        const perDiemData = perDiemsData.find(pd => pd.location == addLocation.locationId);
+        if (perDiemData) {
+          const perDiemCost = Number(perDiemData.amount) || 0;
+          const hardshipAllowance = Number(perDiemData.hardship_allowance_amount) || 0;
+          totalCost += (perDiemCost + hardshipAllowance) * addLocation.supervisors * addLocation.days;
+        }
+        
+        const accommodationData = accommodationsData.find(acc => 
+          acc.location == addLocation.locationId && acc.service_type === 'FULL_BOARD'
+        );
+        if (accommodationData) {
+          const accommodationCost = Number(accommodationData.price) || 0;
+          totalCost += accommodationCost * addLocation.supervisors * addLocation.days;
+        }
+      });
       
       // Additional supervisor costs
       const additionalSupervisors = allFormValues.numberOfSupervisorsWithAdditionalCost || 0;
@@ -140,7 +260,16 @@ const SupervisionCostingTool: React.FC<SupervisionCostingToolProps> = ({
         }
       });
       
-      // Transport costs
+      // Transport costs from routes
+      landTransportRoutes.forEach(route => {
+        totalCost += Number(route.price) * Number(route.participants);
+      });
+      
+      airTransportRoutes.forEach(route => {
+        totalCost += Number(route.price) * Number(route.participants);
+      });
+      
+      // Transport costs from simple inputs
       if (allFormValues.transportRequired) {
         const landSupervisors = Number(allFormValues.landTransportSupervisors) || 0;
         const airSupervisors = Number(allFormValues.airTransportSupervisors) || 0;
@@ -167,9 +296,131 @@ const SupervisionCostingTool: React.FC<SupervisionCostingToolProps> = ({
     supervisorCostsData,
     landTransportsData,
     airTransportsData,
+    avgLandTransportCost,
+    avgAirTransportCost,
     setValue
   ]);
 
+  // Add additional location
+  const addAdditionalLocation = () => {
+    setAdditionalLocations([...additionalLocations, {
+      locationId: locationsData[0]?.id || '',
+      days: 1,
+      supervisors: 1
+    }]);
+  };
+
+  // Remove additional location
+  const removeAdditionalLocation = (index: number) => {
+    const updated = [...additionalLocations];
+    updated.splice(index, 1);
+    setAdditionalLocations(updated);
+  };
+
+  // Update additional location
+  const updateAdditionalLocation = (index: number, field: keyof SupervisionLocation, value: string | number) => {
+    const updated = [...additionalLocations];
+    updated[index] = { ...updated[index], [field]: value };
+    setAdditionalLocations(updated);
+  };
+
+  // Add land transport route
+  const addLandTransportRoute = () => {
+    if (landTransportsData.length === 0) return;
+    
+    setLandTransportRoutes([...landTransportRoutes, {
+      id: `land-${Date.now()}`,
+      transportId: landTransportsData[0]?.id || '',
+      origin: landTransportsData[0]?.origin || '',
+      destination: landTransportsData[0]?.destination || '',
+      price: Number(landTransportsData[0]?.price) || 0,
+      participants: 1,
+      originName: landTransportsData[0]?.origin_name || '',
+      destinationName: landTransportsData[0]?.destination_name || ''
+    }]);
+  };
+
+  // Remove land transport route
+  const removeLandTransportRoute = (index: number) => {
+    const updated = [...landTransportRoutes];
+    updated.splice(index, 1);
+    setLandTransportRoutes(updated);
+  };
+
+  // Update land transport route
+  const updateLandTransportRoute = (index: number, field: keyof TransportRoute, value: string | number) => {
+    const updated = [...landTransportRoutes];
+    
+    if (field === 'transportId') {
+      // Find the selected transport and update all related fields
+      const selectedTransport = landTransportsData.find(t => t.id === value);
+      if (selectedTransport) {
+        updated[index] = {
+          ...updated[index],
+          transportId: selectedTransport.id,
+          origin: selectedTransport.origin,
+          destination: selectedTransport.destination,
+          price: Number(selectedTransport.price),
+          originName: selectedTransport.origin_name,
+          destinationName: selectedTransport.destination_name
+        };
+      }
+    } else {
+      updated[index] = { ...updated[index], [field]: value };
+    }
+    
+    setLandTransportRoutes(updated);
+  };
+
+  // Add air transport route
+  const addAirTransportRoute = () => {
+    if (airTransportsData.length === 0) return;
+    
+    setAirTransportRoutes([...airTransportRoutes, {
+      id: `air-${Date.now()}`,
+      transportId: airTransportsData[0]?.id || '',
+      origin: airTransportsData[0]?.origin || '',
+      destination: airTransportsData[0]?.destination || '',
+      price: Number(airTransportsData[0]?.price) || 0,
+      participants: 1,
+      originName: airTransportsData[0]?.origin_name || '',
+      destinationName: airTransportsData[0]?.destination_name || ''
+    }]);
+  };
+
+  // Remove air transport route
+  const removeAirTransportRoute = (index: number) => {
+    const updated = [...airTransportRoutes];
+    updated.splice(index, 1);
+    setAirTransportRoutes(updated);
+  };
+
+  // Update air transport route
+  const updateAirTransportRoute = (index: number, field: keyof TransportRoute, value: string | number) => {
+    const updated = [...airTransportRoutes];
+    
+    if (field === 'transportId') {
+      // Find the selected transport and update all related fields
+      const selectedTransport = airTransportsData.find(t => t.id === value);
+      if (selectedTransport) {
+        updated[index] = {
+          ...updated[index],
+          transportId: selectedTransport.id,
+          origin: selectedTransport.origin,
+          destination: selectedTransport.destination,
+          price: Number(selectedTransport.price),
+          originName: selectedTransport.origin_name,
+          destinationName: selectedTransport.destination_name
+        };
+      }
+    } else {
+      updated[index] = { ...updated[index], [field]: value };
+    }
+    
+    setAirTransportRoutes(updated);
+  };
+
+  // Handle form submission - THIS WAS THE MISSING FUNCTION
   const handleFormSubmit = async (data: SupervisionCost) => {
     try {
       setIsCalculating(true);
@@ -192,7 +443,23 @@ const SupervisionCostingTool: React.FC<SupervisionCostingToolProps> = ({
         numberOfSupervisorsWithAdditionalCost: Number(data.numberOfSupervisorsWithAdditionalCost || 0),
         landTransportSupervisors: Number(data.landTransportSupervisors || 0),
         airTransportSupervisors: Number(data.airTransportSupervisors || 0),
-        otherCosts: Number(data.otherCosts || 0)
+        otherCosts: Number(data.otherCosts || 0),
+        // Include additional data
+        additionalLocations,
+        landTransportRoutes,
+        airTransportRoutes,
+        supervision_details: {
+          description: data.description,
+          numberOfDays: Number(data.numberOfDays),
+          numberOfSupervisors: Number(data.numberOfSupervisors),
+          location: data.location,
+          additionalLocations,
+          landTransportRoutes,
+          airTransportRoutes,
+          additionalSupervisorCosts: data.additionalSupervisorCosts,
+          otherCosts: Number(data.otherCosts || 0),
+          justification: data.justification
+        }
       };
       
       console.log("Submitting supervision costs:", supervisionCosts);
@@ -212,6 +479,16 @@ const SupervisionCostingTool: React.FC<SupervisionCostingToolProps> = ({
       setIsCalculating(false);
     }
   };
+
+  // Show loading state while fetching data
+  if (isLoading) {
+    return (
+      <div className="flex flex-col items-center justify-center p-8">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-700 mb-4"></div>
+        <p className="text-gray-700">Loading supervision costing data from database...</p>
+      </div>
+    );
+  }
 
   return (
     <form onSubmit={handleSubmit(handleFormSubmit)} className="space-y-6 max-h-[75vh] overflow-y-auto p-2 pb-20">
@@ -256,6 +533,28 @@ const SupervisionCostingTool: React.FC<SupervisionCostingToolProps> = ({
         />
         {errors.description && (
           <p className="mt-1 text-sm text-red-600">{errors.description.message}</p>
+        )}
+      </div>
+
+      {/* Main Location Selection */}
+      <div>
+        <label className="block text-sm font-medium text-gray-700">
+          Primary Supervision Location
+        </label>
+        <select
+          {...register('location', { required: 'Location is required' })}
+          className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+        >
+          <option value="">Select location...</option>
+          {locationsData.map(location => (
+            <option key={location.id} value={location.id}>
+              {location.name}, {location.region}
+              {location.is_hardship_area && ' (Hardship Area)'}
+            </option>
+          ))}
+        </select>
+        {errors.location && (
+          <p className="mt-1 text-sm text-red-600">{errors.location.message}</p>
         )}
       </div>
 
@@ -321,13 +620,82 @@ const SupervisionCostingTool: React.FC<SupervisionCostingToolProps> = ({
         </div>
       </div>
 
+      {/* Additional Locations Section */}
+      <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+        <div className="flex justify-between items-center mb-4">
+          <h4 className="text-md font-medium text-gray-700">Additional Supervision Locations</h4>
+          <button
+            type="button"
+            onClick={addAdditionalLocation}
+            disabled={locationsData.length === 0}
+            className="flex items-center text-sm text-blue-600 hover:text-blue-800 disabled:opacity-50"
+          >
+            <Plus className="h-4 w-4 mr-1" />
+            Add Location
+          </button>
+        </div>
+
+        {additionalLocations.length === 0 ? (
+          <p className="text-sm text-gray-500 italic">No additional locations added</p>
+        ) : (
+          <div className="space-y-3">
+            {additionalLocations.map((location, index) => (
+              <div key={index} className="flex items-center space-x-4 bg-white p-3 rounded border">
+                <div className="flex-1">
+                  <select
+                    value={location.locationId}
+                    onChange={(e) => updateAdditionalLocation(index, 'locationId', e.target.value)}
+                    className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm"
+                  >
+                    <option value="">Select location...</option>
+                    {locationsData.map(loc => (
+                      <option key={loc.id} value={loc.id}>
+                        {loc.name}, {loc.region}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="w-20">
+                  <input
+                    type="number"
+                    min="1"
+                    value={location.days}
+                    onChange={(e) => updateAdditionalLocation(index, 'days', Number(e.target.value))}
+                    className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm"
+                    placeholder="Days"
+                  />
+                </div>
+                <div className="w-24">
+                  <input
+                    type="number"
+                    min="1"
+                    value={location.supervisors}
+                    onChange={(e) => updateAdditionalLocation(index, 'supervisors', Number(e.target.value))}
+                    className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm"
+                    placeholder="Supervisors"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => removeAdditionalLocation(index)}
+                  className="p-1 text-red-600 hover:text-red-800"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Additional Supervisor Costs */}
       <div>
         <label className="block text-sm font-medium text-gray-700 mb-2">
           Additional Supervisor Costs
         </label>
-        <div className="grid grid-cols-2 gap-4">
-          {SUPERVISOR_COSTS.map(cost => (
-            <label key={cost.value} className="flex items-center">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {supervisorCostsData.map(cost => (
+            <label key={cost.id} className="flex items-center">
               <Controller
                 name="additionalSupervisorCosts"
                 control={control}
@@ -335,26 +703,29 @@ const SupervisionCostingTool: React.FC<SupervisionCostingToolProps> = ({
                 render={({ field }) => (
                   <input
                     type="checkbox"
-                    value={cost.value}
-                    checked={field.value?.includes(cost.value)}
+                    value={cost.cost_type}
+                    checked={field.value?.includes(cost.cost_type)}
                     onChange={(e) => {
                       const currentValues = field.value || [];
                       field.onChange(
                         e.target.checked
-                          ? [...currentValues, cost.value]
-                          : currentValues.filter((v: string) => v !== cost.value)
+                          ? [...currentValues, cost.cost_type]
+                          : currentValues.filter((v: string) => v !== cost.cost_type)
                       );
                     }}
                     className="h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
                   />
                 )}
               />
-              <span className="ml-2 text-sm text-gray-700">{cost.label}</span>
+              <span className="ml-2 text-sm text-gray-700">
+                {cost.cost_type_display} - ETB {Number(cost.amount).toLocaleString()}
+              </span>
             </label>
           ))}
         </div>
       </div>
 
+      {/* Transport Section */}
       <div>
         <div className="flex items-center mb-4">
           <input
@@ -369,7 +740,8 @@ const SupervisionCostingTool: React.FC<SupervisionCostingToolProps> = ({
       </div>
       
       {allFormValues.transportRequired && (
-        <div className="space-y-4">
+        <div className="space-y-6">
+          {/* Simple Transport Inputs */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700">
@@ -391,6 +763,9 @@ const SupervisionCostingTool: React.FC<SupervisionCostingToolProps> = ({
               {errors.landTransportSupervisors && (
                 <p className="mt-1 text-sm text-red-600">{errors.landTransportSupervisors.message}</p>
               )}
+              <p className="mt-1 text-xs text-gray-500">
+                Average cost: ETB {avgLandTransportCost.toLocaleString()} per supervisor
+              </p>
             </div>
 
             <div>
@@ -413,7 +788,134 @@ const SupervisionCostingTool: React.FC<SupervisionCostingToolProps> = ({
               {errors.airTransportSupervisors && (
                 <p className="mt-1 text-sm text-red-600">{errors.airTransportSupervisors.message}</p>
               )}
+              <p className="mt-1 text-xs text-gray-500">
+                Average cost: ETB {avgAirTransportCost.toLocaleString()} per supervisor
+              </p>
             </div>
+          </div>
+
+          {/* Detailed Land Transport Routes */}
+          <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+            <div className="flex justify-between items-center mb-4">
+              <h4 className="text-md font-medium text-gray-700">Detailed Land Transport Routes</h4>
+              <button
+                type="button"
+                onClick={addLandTransportRoute}
+                disabled={landTransportsData.length === 0}
+                className="flex items-center text-sm text-blue-600 hover:text-blue-800 disabled:opacity-50"
+              >
+                <Plus className="h-4 w-4 mr-1" />
+                Add Route
+              </button>
+            </div>
+
+            {landTransportRoutes.length === 0 ? (
+              <p className="text-sm text-gray-500 italic">No land transport routes added</p>
+            ) : (
+              <div className="space-y-3">
+                {landTransportRoutes.map((route, index) => (
+                  <div key={route.id} className="flex items-center space-x-4 bg-white p-3 rounded border">
+                    <div className="flex-1">
+                      <select
+                        value={route.transportId}
+                        onChange={(e) => updateLandTransportRoute(index, 'transportId', e.target.value)}
+                        className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm"
+                      >
+                        <option value="">Select route...</option>
+                        {landTransportsData.map(transport => (
+                          <option key={transport.id} value={transport.id}>
+                            {transport.origin_name} → {transport.destination_name} 
+                            ({transport.trip_type}) - ETB {Number(transport.price).toLocaleString()}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="w-24">
+                      <input
+                        type="number"
+                        min="1"
+                        value={route.participants}
+                        onChange={(e) => updateLandTransportRoute(index, 'participants', Number(e.target.value))}
+                        className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm"
+                        placeholder="Count"
+                      />
+                    </div>
+                    <div className="text-sm font-medium text-green-600">
+                      ETB {(Number(route.price) * Number(route.participants)).toLocaleString()}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => removeLandTransportRoute(index)}
+                      className="p-1 text-red-600 hover:text-red-800"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Detailed Air Transport Routes */}
+          <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+            <div className="flex justify-between items-center mb-4">
+              <h4 className="text-md font-medium text-gray-700">Detailed Air Transport Routes</h4>
+              <button
+                type="button"
+                onClick={addAirTransportRoute}
+                disabled={airTransportsData.length === 0}
+                className="flex items-center text-sm text-blue-600 hover:text-blue-800 disabled:opacity-50"
+              >
+                <Plus className="h-4 w-4 mr-1" />
+                Add Route
+              </button>
+            </div>
+
+            {airTransportRoutes.length === 0 ? (
+              <p className="text-sm text-gray-500 italic">No air transport routes added</p>
+            ) : (
+              <div className="space-y-3">
+                {airTransportRoutes.map((route, index) => (
+                  <div key={route.id} className="flex items-center space-x-4 bg-white p-3 rounded border">
+                    <div className="flex-1">
+                      <select
+                        value={route.transportId}
+                        onChange={(e) => updateAirTransportRoute(index, 'transportId', e.target.value)}
+                        className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm"
+                      >
+                        <option value="">Select route...</option>
+                        {airTransportsData.map(transport => (
+                          <option key={transport.id} value={transport.id}>
+                            {transport.origin_name} → {transport.destination_name} 
+                            - ETB {Number(transport.price).toLocaleString()}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="w-24">
+                      <input
+                        type="number"
+                        min="1"
+                        value={route.participants}
+                        onChange={(e) => updateAirTransportRoute(index, 'participants', Number(e.target.value))}
+                        className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm"
+                        placeholder="Count"
+                      />
+                    </div>
+                    <div className="text-sm font-medium text-green-600">
+                      ETB {(Number(route.price) * Number(route.participants)).toLocaleString()}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => removeAirTransportRoute(index)}
+                      className="p-1 text-red-600 hover:text-red-800"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -487,7 +989,7 @@ const SupervisionCostingTool: React.FC<SupervisionCostingToolProps> = ({
         </div>
         <p className="mt-2 text-sm text-gray-500 flex items-center">
           <Info className="h-4 w-4 mr-1" />
-          This total is calculated based on supervision days, supervisors, and standard rates
+          This total is calculated based on supervision days, supervisors, locations, and standard rates
         </p>
       </div>
     </form>
