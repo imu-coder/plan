@@ -32,73 +32,33 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
   );
   const [userOrgId, setUserOrgId] = useState<number | null>(null);
   const [isFormReady, setIsFormReady] = useState(false);
+  const [authData, setAuthData] = useState<any>(null);
 
-  // Enhanced error state
-  const setError = (message: string) => {
-    setSubmitError(message);
-    console.error('MainActivityForm Error:', message);
-  };
-
-  // Target validation function
-  const validateTargets = () => {
-    try {
-      const baselineValue = baseline ? parseFloat(baseline) : null;
-
-      if (targetType === 'cumulative') {
-        const quarterly_sum = q1Target + q2Target + q3Target + q4Target;
-        if (Math.abs(quarterly_sum - annualTarget) > 0.01) {
-          return `For cumulative targets, sum of quarterly targets (${quarterly_sum}) must equal annual target (${annualTarget})`;
-        }
-      } else if (targetType === 'increasing') {
-        if (baselineValue !== null && q1Target < baselineValue) {
-          return `For increasing targets, Q1 target (${q1Target}) must be greater than or equal to baseline (${baselineValue})`;
-        }
-        if (!(q1Target <= q2Target && q2Target <= q3Target && q3Target <= q4Target)) {
-          return 'For increasing targets, quarterly targets must be in ascending order (Q1 ≤ Q2 ≤ Q3 ≤ Q4)';
-        }
-        if (Math.abs(q4Target - annualTarget) > 0.01) {
-          return `For increasing targets, Q4 target (${q4Target}) must equal annual target (${annualTarget})`;
-        }
-      } else if (targetType === 'decreasing') {
-        if (baselineValue !== null && q1Target > baselineValue) {
-          return `For decreasing targets, Q1 target (${q1Target}) must be less than or equal to baseline (${baselineValue})`;
-        }
-        if (!(q1Target >= q2Target && q2Target >= q3Target && q3Target >= q4Target)) {
-          return 'For decreasing targets, quarterly targets must be in descending order (Q1 ≥ Q2 ≥ Q3 ≥ Q4)';
-        }
-        if (Math.abs(q4Target - annualTarget) > 0.01) {
-          return `For decreasing targets, Q4 target (${q4Target}) must equal annual target (${annualTarget})`;
-        }
-      } else if (targetType === 'constant') {
-        if (!(Math.abs(q1Target - annualTarget) < 0.01 && 
-              Math.abs(q2Target - annualTarget) < 0.01 && 
-              Math.abs(q3Target - annualTarget) < 0.01 && 
-              Math.abs(q4Target - annualTarget) < 0.01)) {
-          return `For constant targets, all quarterly targets must equal annual target (Q1=Q2=Q3=Q4=${annualTarget})`;
-        }
-      }
-      
-      return null;
-    } catch (error) {
-      console.error('Error in validateTargets:', error);
-      return 'Error validating targets. Please check your input values.';
-    }
-  };
-  // Get user organization ID
+  // Get user organization ID and ensure authentication
   useEffect(() => {
     const fetchUserData = async () => {
       try {
-        const authData = await auth.getCurrentUser();
-        if (authData.userOrganizations && authData.userOrganizations.length > 0) {
-          setUserOrgId(authData.userOrganizations[0].organization);
+        console.log('MainActivityForm: Fetching user authentication data...');
+        const userData = await auth.getCurrentUser();
+        
+        if (!userData.isAuthenticated) {
+          setSubmitError('Authentication required. Please log in again.');
+          return;
+        }
+        
+        setAuthData(userData);
+        
+        if (userData.userOrganizations && userData.userOrganizations.length > 0) {
+          const orgId = userData.userOrganizations[0].organization;
+          setUserOrgId(orgId);
           setIsFormReady(true);
-          console.log('MainActivityForm: User organization ID set to:', authData.userOrganizations[0].organization);
+          console.log('MainActivityForm: User organization ID set to:', orgId);
         } else {
-          setError('User organization not found. Please refresh the page.');
+          setSubmitError('No organization assigned to user. Please contact administrator.');
         }
       } catch (error) {
         console.error('Failed to fetch user data:', error);
-        setError('Failed to load user data. Please refresh the page.');
+        setSubmitError('Failed to load user data. Please refresh the page.');
       }
     };
     
@@ -108,24 +68,52 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
   // Fetch initiative data to get its weight
   useEffect(() => {
     const fetchInitiativeData = async () => {
+      if (!initiativeId) return;
+      
       try {
-        const response = await fetch(`/api/strategic-initiatives/${initiativeId}/`);
-        if (!response.ok) throw new Error('Failed to fetch initiative');
-        const data = await response.json();
-        if (data && data.weight) {
-          const weight = parseFloat(data.weight);
+        console.log('MainActivityForm: Fetching initiative data for ID:', initiativeId);
+        
+        // Try multiple approaches to get initiative data
+        let initiativeData = null;
+        
+        try {
+          // First try direct API call
+          const response = await api.get(`/strategic-initiatives/${initiativeId}/`);
+          initiativeData = response.data;
+        } catch (apiError) {
+          console.warn('Direct API call failed, trying fetch:', apiError);
+          
+          // Fallback to fetch
+          const response = await fetch(`/api/strategic-initiatives/${initiativeId}/`, {
+            credentials: 'include',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-CSRFToken': Cookies.get('csrftoken') || '',
+            }
+          });
+          
+          if (response.ok) {
+            initiativeData = await response.json();
+          } else {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          }
+        }
+        
+        if (initiativeData && initiativeData.weight) {
+          const weight = parseFloat(initiativeData.weight);
           if (!isNaN(weight) && weight > 0) {
             setInitiativeWeight(weight);
+            console.log('MainActivityForm: Initiative weight set to:', weight);
           }
         }
       } catch (error) {
-        console.error('Error fetching initiative:', error);
+        console.error('Error fetching initiative data:', error);
+        // Use default weight if fetch fails
+        setInitiativeWeight(35);
       }
     };
     
-    if (initiativeId) {
-      fetchInitiativeData();
-    }
+    fetchInitiativeData();
   }, [initiativeId]);
 
   const { register, control, handleSubmit, watch, setValue, formState: { errors } } = useForm<Partial<MainActivity>>({
@@ -183,6 +171,52 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
       ? (q1Target === q2Target && q2Target === q3Target && q3Target === q4Target && q1Target === annualTarget ? annualTarget : 0)
       : q4Target;
 
+  // Target validation function
+  const validateTargets = () => {
+    try {
+      const baselineValue = baseline ? parseFloat(baseline) : null;
+
+      if (targetType === 'cumulative') {
+        const quarterly_sum = q1Target + q2Target + q3Target + q4Target;
+        if (Math.abs(quarterly_sum - annualTarget) > 0.01) {
+          return `For cumulative targets, sum of quarterly targets (${quarterly_sum}) must equal annual target (${annualTarget})`;
+        }
+      } else if (targetType === 'increasing') {
+        if (baselineValue !== null && q1Target < baselineValue) {
+          return `For increasing targets, Q1 target (${q1Target}) must be greater than or equal to baseline (${baselineValue})`;
+        }
+        if (!(q1Target <= q2Target && q2Target <= q3Target && q3Target <= q4Target)) {
+          return 'For increasing targets, quarterly targets must be in ascending order (Q1 ≤ Q2 ≤ Q3 ≤ Q4)';
+        }
+        if (Math.abs(q4Target - annualTarget) > 0.01) {
+          return `For increasing targets, Q4 target (${q4Target}) must equal annual target (${annualTarget})`;
+        }
+      } else if (targetType === 'decreasing') {
+        if (baselineValue !== null && q1Target > baselineValue) {
+          return `For decreasing targets, Q1 target (${q1Target}) must be less than or equal to baseline (${baselineValue})`;
+        }
+        if (!(q1Target >= q2Target && q2Target >= q3Target && q3Target >= q4Target)) {
+          return 'For decreasing targets, quarterly targets must be in descending order (Q1 ≥ Q2 ≥ Q3 ≥ Q4)';
+        }
+        if (Math.abs(q4Target - annualTarget) > 0.01) {
+          return `For decreasing targets, Q4 target (${q4Target}) must equal annual target (${annualTarget})`;
+        }
+      } else if (targetType === 'constant') {
+        if (!(Math.abs(q1Target - annualTarget) < 0.01 && 
+              Math.abs(q2Target - annualTarget) < 0.01 && 
+              Math.abs(q3Target - annualTarget) < 0.01 && 
+              Math.abs(q4Target - annualTarget) < 0.01)) {
+          return `For constant targets, all quarterly targets must equal annual target (Q1=Q2=Q3=Q4=${annualTarget})`;
+        }
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('Error in validateTargets:', error);
+      return 'Error validating targets. Please check your input values.';
+    }
+  };
+
   // Check if form is valid
   const getValidationErrors = () => {
     const errors: string[] = [];
@@ -234,189 +268,210 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
     
     try {
       console.log('MainActivityForm: Starting form submission...');
-      console.log('Form data received:', data);
       
       // Ensure we have user organization ID
       if (!userOrgId) {
-        setSubmitError('User organization not found. Please refresh the page and try again.');
-        setIsSubmitting(false);
-        return;
+        throw new Error('User organization not found. Please refresh the page and try again.');
       }
       
-      console.log('User organization ID:', userOrgId);
-
-      // Validate required fields
-      if (!data.name?.trim()) {
-        setSubmitError('Activity name is required');
-        setIsSubmitting(false);
-        return;
+      // Ensure authentication is valid
+      if (!authData?.isAuthenticated) {
+        throw new Error('Authentication required. Please log in again.');
+      }
+      
+      // Validate required fields with detailed checks
+      if (!data.name?.trim() || data.name.trim().length < 3) {
+        throw new Error('Activity name is required and must be at least 3 characters long');
       }
 
-      if (!data.weight || Number(data.weight) <= 0) {
-        setSubmitError('Weight must be greater than 0');
-        setIsSubmitting(false);
-        return;
+      if (!data.weight || Number(data.weight) <= 0 || Number(data.weight) > 100) {
+        throw new Error('Weight must be between 0.01 and 100');
       }
 
       if (!data.baseline?.trim()) {
-        setSubmitError('Baseline is required');
-        setIsSubmitting(false);
-        return;
+        throw new Error('Baseline is required and cannot be empty');
       }
 
       if (!data.annual_target || Number(data.annual_target) <= 0) {
-        setSubmitError('Annual target is required and must be greater than 0');
-        setIsSubmitting(false);
-        return;
+        throw new Error('Annual target is required and must be greater than 0');
       }
       
+      // Validate period selection
+      const hasMonths = data.selected_months && Array.isArray(data.selected_months) && data.selected_months.length > 0;
+      const hasQuarters = data.selected_quarters && Array.isArray(data.selected_quarters) && data.selected_quarters.length > 0;
+      
+      if (!hasMonths && !hasQuarters) {
+        throw new Error('Please select at least one period (month or quarter)');
+      }
+
+      // Validate targets
+      const targetError = validateTargets();
+      if (targetError) {
+        throw new Error(targetError);
+      }
+
       // Ensure CSRF token is available
       try {
         await auth.getCurrentUser();
-        const csrfToken = Cookies.get('csrftoken');
+        let csrfToken = Cookies.get('csrftoken');
+        
         if (!csrfToken) {
-          console.warn('No CSRF token found, attempting to get one...');
-          await axios.get('/api/auth/csrf/', { withCredentials: true });
+          console.log('No CSRF token found, fetching new one...');
+          await axios.get('/api/auth/csrf/', { 
+            withCredentials: true,
+            timeout: 10000
+          });
+          csrfToken = Cookies.get('csrftoken');
         }
+        
+        if (!csrfToken) {
+          throw new Error('Failed to obtain CSRF token. Please refresh the page.');
+        }
+        
+        console.log('CSRF token available:', csrfToken.substring(0, 8) + '...');
       } catch (csrfError) {
         console.error('CSRF token error:', csrfError);
-        setError('Authentication error. Please refresh the page and try again.');
-        setIsSubmitting(false);
-        return;
+        throw new Error('Authentication error. Please refresh the page and try again.');
       }
 
-      // Validate period selection
-      const hasMonths = data.selected_months && data.selected_months.length > 0;
-      const hasQuarters = data.selected_quarters && data.selected_quarters.length > 0;
-      
-      if (!hasMonths && !hasQuarters) {
-        setSubmitError('Please select at least one period (month or quarter)');
-        setIsSubmitting(false);
-        return;
-      }
-
-      // Check other validation errors before submission
-      const targetError = validateTargets();
-      if (targetError) {
-        setSubmitError(targetError);
-        setIsSubmitting(false);
-        return;
-      }
-
-      // Prepare activity data with proper type conversion
-      const activityData = {
-        name: data.name?.trim(),
-        baseline: data.baseline?.trim(),
+      // Prepare clean activity data with proper validation
+      const cleanActivityData = {
+        name: String(data.name).trim(),
+        baseline: String(data.baseline).trim(),
         weight: parseFloat(String(data.weight || 0)),
-        target_type: data.target_type || 'cumulative',
+        target_type: String(data.target_type || 'cumulative'),
         q1_target: parseFloat(String(data.q1_target || 0)),
         q2_target: parseFloat(String(data.q2_target || 0)),
         q3_target: parseFloat(String(data.q3_target || 0)),
         q4_target: parseFloat(String(data.q4_target || 0)),
         annual_target: parseFloat(String(data.annual_target || 0)),
-        initiative: initiativeId,
-        organization: userOrgId,
-        organization_id: userOrgId,
-        // Period selection based on type
-        selected_months: periodType === 'months' ? data.selected_months : [],
-        selected_quarters: periodType === 'quarters' ? data.selected_quarters : [],
+        initiative: String(initiativeId),
+        organization: Number(userOrgId),
+        organization_id: Number(userOrgId),
+        // Period selection based on type - ensure arrays
+        selected_months: periodType === 'months' ? (data.selected_months || []) : [],
+        selected_quarters: periodType === 'quarters' ? (data.selected_quarters || []) : [],
       };
       
-      // Additional validation for production
-      if (!activityData.name || activityData.name.length < 3) {
-        setError('Activity name must be at least 3 characters long');
-        setIsSubmitting(false);
-        return;
+      // Final validation before submission
+      if (!cleanActivityData.name || cleanActivityData.name.length < 3) {
+        throw new Error('Activity name must be at least 3 characters long');
       }
       
-      if (activityData.weight <= 0 || activityData.weight > 100) {
-        setError('Weight must be between 0.01 and 100');
-        setIsSubmitting(false);
-        return;
+      if (isNaN(cleanActivityData.weight) || cleanActivityData.weight <= 0 || cleanActivityData.weight > 100) {
+        throw new Error('Weight must be a valid number between 0.01 and 100');
       }
       
-      if (activityData.annual_target <= 0) {
-        setError('Annual target must be greater than 0');
-        setIsSubmitting(false);
-        return;
+      if (isNaN(cleanActivityData.annual_target) || cleanActivityData.annual_target <= 0) {
+        throw new Error('Annual target must be a valid number greater than 0');
       }
 
-      console.log('MainActivityForm: Submitting activity data:', {
+      if (!cleanActivityData.initiative) {
+        throw new Error('Initiative ID is required');
+      }
+
+      if (!cleanActivityData.organization || isNaN(cleanActivityData.organization)) {
+        throw new Error('Valid organization ID is required');
+      }
+
+      // Validate that at least one period is selected
+      const hasValidPeriods = (cleanActivityData.selected_months && cleanActivityData.selected_months.length > 0) ||
+                             (cleanActivityData.selected_quarters && cleanActivityData.selected_quarters.length > 0);
+      
+      if (!hasValidPeriods) {
+        throw new Error('At least one month or quarter must be selected');
+      }
+
+      console.log('MainActivityForm: Submitting clean activity data:', {
         operation: initialData ? 'UPDATE' : 'CREATE',
         activityId: initialData?.id,
-        name: activityData.name,
-        weight: activityData.weight,
-        organization: activityData.organization,
-        initiative: activityData.initiative,
-        target_type: activityData.target_type,
-        baseline: activityData.baseline,
-        annual_target: activityData.annual_target
+        name: cleanActivityData.name,
+        weight: cleanActivityData.weight,
+        organization: cleanActivityData.organization,
+        initiative: cleanActivityData.initiative,
+        target_type: cleanActivityData.target_type,
+        baseline: cleanActivityData.baseline,
+        annual_target: cleanActivityData.annual_target,
+        periods: {
+          months: cleanActivityData.selected_months?.length || 0,
+          quarters: cleanActivityData.selected_quarters?.length || 0
+        }
       });
       
-      await onSubmit(activityData);
+      // Call parent onSubmit with clean data
+      await onSubmit(cleanActivityData);
       
       console.log('MainActivityForm: Successfully submitted activity');
     } catch (error: any) {
-      console.error('Error submitting form:', error);
+      console.error('MainActivityForm submission error:', error);
       
       // Enhanced error handling for production
       let errorMessage = 'Failed to save activity.';
       
       if (error.response) {
         const { status, data } = error.response;
+        console.error('Server response error:', { status, data });
         
         if (status === 500) {
           // Server error - provide helpful message
-          if (typeof data === 'string' && data.includes('<!DOCTYPE html>')) {
-            // HTML error page
+          if (typeof data === 'string') {
             if (data.includes('ValidationError')) {
-              errorMessage = 'Validation error on server. Please check your input values.';
+              errorMessage = 'Server validation error. Please check your input values and try again.';
             } else if (data.includes('IntegrityError')) {
-              errorMessage = 'Data integrity error. This activity name might already exist.';
+              errorMessage = 'Data integrity error. This activity name might already exist for this initiative.';
+            } else if (data.includes('DoesNotExist')) {
+              errorMessage = 'Initiative not found. Please refresh the page and try again.';
             } else {
               errorMessage = 'Server error occurred. Please try again or contact support.';
             }
           } else {
-            errorMessage = 'Server error occurred. Please try again.';
+            errorMessage = 'Internal server error. Please try again.';
           }
         } else if (status === 400) {
           // Bad request - validation error
           if (typeof data === 'object' && data !== null) {
             if (data.detail) {
-              errorMessage = data.detail;
+              errorMessage = String(data.detail);
             } else if (data.non_field_errors) {
               errorMessage = Array.isArray(data.non_field_errors) 
                 ? data.non_field_errors[0] 
-                : data.non_field_errors;
+                : String(data.non_field_errors);
             } else if (data.name) {
-              errorMessage = Array.isArray(data.name) ? data.name[0] : data.name;
+              errorMessage = Array.isArray(data.name) ? data.name[0] : String(data.name);
             } else if (data.weight) {
               const weightError = Array.isArray(data.weight) ? data.weight[0] : data.weight;
               errorMessage = `Weight error: ${weightError}`;
+            } else if (data.initiative) {
+              errorMessage = Array.isArray(data.initiative) ? data.initiative[0] : String(data.initiative);
             } else {
               // Get first error from any field
               const firstError = Object.values(data)[0];
               if (Array.isArray(firstError)) {
-                errorMessage = firstError[0];
+                errorMessage = String(firstError[0]);
               } else if (typeof firstError === 'string') {
                 errorMessage = firstError;
+              } else {
+                errorMessage = 'Validation error. Please check your input.';
               }
             }
           } else if (typeof data === 'string') {
             errorMessage = data;
           }
         } else if (status === 403) {
-          errorMessage = 'Permission denied. You may not have the required permissions.';
+          errorMessage = 'Permission denied. You may not have the required permissions to create activities.';
         } else if (status === 404) {
           errorMessage = 'Initiative not found. Please refresh the page and try again.';
+        } else if (status === 401) {
+          errorMessage = 'Authentication required. Please log in again.';
         } else {
           errorMessage = `Server error (${status}). Please try again.`;
         }
       } else if (error.request) {
         // Network error
+        console.error('Network error:', error.request);
         errorMessage = 'Network error. Please check your connection and try again.';
       } else if (error.message) {
-        errorMessage = error.message;
+        errorMessage = String(error.message);
       }
       
       setSubmitError(errorMessage);
@@ -425,53 +480,6 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
     }
   };
 
-  // Enhanced validation function
-  const validateTargetsLogic = () => {
-    try {
-      const baselineValue = baseline ? parseFloat(baseline) : null;
-
-      if (targetType === 'cumulative') {
-        const quarterly_sum = q1Target + q2Target + q3Target + q4Target;
-        if (Math.abs(quarterly_sum - annualTarget) > 0.01) {
-          return `For cumulative targets, sum of quarterly targets (${quarterly_sum}) must equal annual target (${annualTarget})`;
-        }
-      } else if (targetType === 'increasing') {
-        // Q1 must equal or be greater than baseline
-        if (baselineValue !== null && q1Target < baselineValue) {
-          return `For increasing targets, Q1 target (${q1Target}) must be greater than or equal to baseline (${baselineValue})`;
-        }
-        if (!(q1Target <= q2Target && q2Target <= q3Target && q3Target <= q4Target)) {
-          return 'For increasing targets, quarterly targets must be in ascending order (Q1 ≤ Q2 ≤ Q3 ≤ Q4)';
-        }
-        if (Math.abs(q4Target - annualTarget) > 0.01) {
-          return `For increasing targets, Q4 target (${q4Target}) must equal annual target (${annualTarget})`;
-        }
-      } else if (targetType === 'decreasing') {
-        // Q1 must equal or be less than baseline
-        if (baselineValue !== null && q1Target > baselineValue) {
-          return `For decreasing targets, Q1 target (${q1Target}) must be less than or equal to baseline (${baselineValue})`;
-        }
-        if (!(q1Target >= q2Target && q2Target >= q3Target && q3Target >= q4Target)) {
-          return 'For decreasing targets, quarterly targets must be in descending order (Q1 ≥ Q2 ≥ Q3 ≥ Q4)';
-        }
-        if (Math.abs(q4Target - annualTarget) > 0.01) {
-          return `For decreasing targets, Q4 target (${q4Target}) must equal annual target (${annualTarget})`;
-        }
-      } else if (targetType === 'constant') {
-        if (!(Math.abs(q1Target - annualTarget) < 0.01 && 
-              Math.abs(q2Target - annualTarget) < 0.01 && 
-              Math.abs(q3Target - annualTarget) < 0.01 && 
-              Math.abs(q4Target - annualTarget) < 0.01)) {
-          return `For constant targets, all quarterly targets must equal annual target (Q1=Q2=Q3=Q4=${annualTarget})`;
-        }
-      }
-      
-      return null;
-    } catch (error) {
-      console.error('Error in validateTargets:', error);
-      return 'Error validating targets. Please check your input values.';
-    }
-  };
   const togglePeriodType = () => {
     try {
       if (periodType === 'months') {
@@ -556,22 +564,30 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
 
       {/* Submit Errors */}
       {submitError && (
-        <div className="p-3 bg-red-50 border border-red-200 rounded-md flex items-center gap-2 text-red-700">
-          <AlertCircle className="h-5 w-5 text-red-500" />
-          <p className="text-sm text-red-600">{submitError}</p>
+        <div className="p-3 bg-red-50 border border-red-200 rounded-md flex items-start gap-2">
+          <AlertCircle className="h-5 w-5 text-red-500 mt-0.5 flex-shrink-0" />
+          <div>
+            <p className="text-sm font-medium text-red-800">Error saving activity:</p>
+            <p className="text-sm text-red-600 mt-1">{submitError}</p>
+          </div>
         </div>
       )}
 
       <div className="space-y-2">
         <label className="block text-sm font-medium text-gray-700">
-          {t('planning.activityName')}
+          {t('planning.activityName')} <span className="text-red-500">*</span>
         </label>
         <p className="text-xs text-gray-500 mb-1">Enter a descriptive name for this activity</p>
         <input
           type="text"
           {...register('name', { 
             required: 'Activity name is required',
-            minLength: { value: 3, message: 'Name must be at least 3 characters' }
+            minLength: { value: 3, message: 'Name must be at least 3 characters' },
+            validate: (value) => {
+              if (!value?.trim()) return 'Activity name cannot be empty';
+              if (value.trim().length < 3) return 'Activity name must be at least 3 characters';
+              return true;
+            }
           })}
           className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
           placeholder="Enter activity name"
@@ -583,26 +599,35 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
 
       <div>
         <label className="block text-sm font-medium text-gray-700 mb-1">
-          {t('planning.weight')} <span className="text-blue-600">(Maximum: {maxWeight.toFixed(2)}%)</span>
+          {t('planning.weight')} <span className="text-red-500">*</span> <span className="text-blue-600">(Maximum: {maxWeight.toFixed(2)}%)</span>
         </label>
         <p className="text-xs text-gray-500 mb-1">The weight of this activity as a percentage of the initiative</p>
         <div className="mt-1 relative rounded-md shadow-sm">
           <input
             type="number"
-            min="0"
+            min="0.01"
             step="0.01"
             max={maxWeight}
             {...register('weight', {
               required: 'Weight is required',
               min: { value: 0.01, message: 'Weight must be greater than 0' },
-              max: { value: maxWeight, message: `Weight cannot exceed ${maxWeight.toFixed(2)}` },
-              valueAsNumber: true
+              max: { value: maxWeight, message: `Weight cannot exceed ${maxWeight.toFixed(2)}%` },
+              valueAsNumber: true,
+              validate: (value) => {
+                if (!value || isNaN(value)) return 'Weight must be a valid number';
+                if (value <= 0) return 'Weight must be greater than 0';
+                if (value > maxWeight) return `Weight cannot exceed ${maxWeight.toFixed(2)}%`;
+                return true;
+              }
             })}
             className={`block w-full rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 ${
               errors.weight ? 'border-red-300' : 'border-gray-300'
             }`}
             placeholder="Enter weight value"
           />
+          <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
+            <span className="text-gray-500 sm:text-sm">%</span>
+          </div>
         </div>
         {errors.weight && (
           <p className="mt-1 text-sm text-red-600 flex items-center">
@@ -628,7 +653,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
           </p>
         ) : (
           <p className="mt-1 text-xs text-red-600 font-medium">
-            ⚠ Over target: {adjustedCurrentTotal.toFixed(2)}% &gt; {expectedActivitiesWeight.toFixed(2)}% (Reduce existing activities)
+            ⚠ Over target: {adjustedCurrentTotal.toFixed(2)}% > {expectedActivitiesWeight.toFixed(2)}% (Reduce existing activities)
           </p>
         )}
       </div>
@@ -642,7 +667,11 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
           type="text"
           {...register('baseline', { 
             required: 'Baseline is required',
-            minLength: { value: 1, message: 'Baseline cannot be empty' }
+            minLength: { value: 1, message: 'Baseline cannot be empty' },
+            validate: (value) => {
+              if (!value?.trim()) return 'Baseline cannot be empty';
+              return true;
+            }
           })}
           className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
           placeholder="Enter current value or starting point"
@@ -660,7 +689,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
           <label className="block text-sm font-medium text-gray-700">
             <span className="flex items-center gap-2">
               <Calendar className="h-5 w-5 text-gray-400" />
-              {t('planning.period')}
+              {t('planning.period')} <span className="text-red-500">*</span>
             </span>
             <span className="text-xs font-normal text-gray-500 block mt-1">
               Select the time periods when this activity will be performed
@@ -797,16 +826,22 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              {t('planning.annualTarget')}
+              {t('planning.annualTarget')} <span className="text-red-500">*</span>
             </label>
             <p className="text-xs text-gray-500 mb-1">The target to reach by the end of the fiscal year</p>
             <input
               type="number"
               step="0.01"
+              min="0.01"
               {...register('annual_target', {
-                required: true,
-                min: 0,
-                valueAsNumber: true
+                required: 'Annual target is required',
+                min: { value: 0.01, message: 'Annual target must be greater than 0' },
+                valueAsNumber: true,
+                validate: (value) => {
+                  if (!value || isNaN(value)) return 'Annual target must be a valid number';
+                  if (value <= 0) return 'Annual target must be greater than 0';
+                  return true;
+                }
               })}
               className={`mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 ${
                 errors.annual_target ? 'border-red-300' : 'border-gray-300'
@@ -816,7 +851,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
             {errors.annual_target && (
               <p className="mt-1 text-sm text-red-600 flex items-center">
                 <AlertCircle className="h-4 w-4 mr-1 flex-shrink-0" />
-                Annual target is required
+                {errors.annual_target.message}
               </p>
             )}
             <p className="mt-1 text-xs text-gray-600">
@@ -826,16 +861,22 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
           
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              {t('planning.q1Target')}
+              {t('planning.q1Target')} <span className="text-red-500">*</span>
             </label>
             <p className="text-xs text-gray-500 mb-1">Target for July - September</p>
             <input
               type="number"
               step="0.01"
+              min="0"
               {...register('q1_target', {
-                required: true,
-                min: 0,
-                valueAsNumber: true
+                required: 'Q1 target is required',
+                min: { value: 0, message: 'Q1 target cannot be negative' },
+                valueAsNumber: true,
+                validate: (value) => {
+                  if (value === undefined || value === null || isNaN(value)) return 'Q1 target must be a valid number';
+                  if (value < 0) return 'Q1 target cannot be negative';
+                  return true;
+                }
               })}
               className={`mt-1 block w-full rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 ${
                 errors.q1_target ? 'border-red-300' : 'border-gray-300'
@@ -845,23 +886,29 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
             {errors.q1_target && (
               <p className="mt-1 text-sm text-red-600 flex items-center">
                 <AlertCircle className="h-4 w-4 mr-1 flex-shrink-0" />
-                {errors.q1_target.message || 'Q1 target is required'}
+                {errors.q1_target.message}
               </p>
             )}
           </div>
           
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              {t('planning.q2Target')}
+              {t('planning.q2Target')} <span className="text-red-500">*</span>
             </label>
             <p className="text-xs text-gray-500 mb-1">Target for October - December</p>
             <input
               type="number"
               step="0.01"
+              min="0"
               {...register('q2_target', {
-                required: true,
-                min: 0,
-                valueAsNumber: true
+                required: 'Q2 target is required',
+                min: { value: 0, message: 'Q2 target cannot be negative' },
+                valueAsNumber: true,
+                validate: (value) => {
+                  if (value === undefined || value === null || isNaN(value)) return 'Q2 target must be a valid number';
+                  if (value < 0) return 'Q2 target cannot be negative';
+                  return true;
+                }
               })}
               className={`mt-1 block w-full rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 ${
                 errors.q2_target ? 'border-red-300' : 'border-gray-300'
@@ -871,7 +918,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
             {errors.q2_target && (
               <p className="mt-1 text-sm text-red-600 flex items-center">
                 <AlertCircle className="h-4 w-4 mr-1 flex-shrink-0" />
-                {errors.q2_target.message || 'Q2 target is required'}
+                {errors.q2_target.message}
               </p>
             )}
           </div>
@@ -892,15 +939,21 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
           
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              {t('planning.q3Target')}
+              {t('planning.q3Target')} <span className="text-red-500">*</span>
             </label>
             <input
               type="number"
               step="0.01"
+              min="0"
               {...register('q3_target', {
-                required: true,
-                min: 0,
-                valueAsNumber: true
+                required: 'Q3 target is required',
+                min: { value: 0, message: 'Q3 target cannot be negative' },
+                valueAsNumber: true,
+                validate: (value) => {
+                  if (value === undefined || value === null || isNaN(value)) return 'Q3 target must be a valid number';
+                  if (value < 0) return 'Q3 target cannot be negative';
+                  return true;
+                }
               })}
               className={`mt-1 block w-full rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 ${
                 errors.q3_target ? 'border-red-300' : 'border-gray-300'
@@ -910,7 +963,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
             {errors.q3_target && (
               <p className="mt-1 text-sm text-red-600 flex items-center">
                 <AlertCircle className="h-4 w-4 mr-1 flex-shrink-0" />
-                {errors.q3_target.message || 'Q3 target is required'}
+                {errors.q3_target.message}
               </p>
             )}
             <p className="mt-1 text-xs text-gray-600">
@@ -934,15 +987,21 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
           
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              {t('planning.q4Target')}
+              {t('planning.q4Target')} <span className="text-red-500">*</span>
             </label>
             <input
               type="number"
               step="0.01"
+              min="0"
               {...register('q4_target', {
-                required: true,
-                min: 0,
-                valueAsNumber: true
+                required: 'Q4 target is required',
+                min: { value: 0, message: 'Q4 target cannot be negative' },
+                valueAsNumber: true,
+                validate: (value) => {
+                  if (value === undefined || value === null || isNaN(value)) return 'Q4 target must be a valid number';
+                  if (value < 0) return 'Q4 target cannot be negative';
+                  return true;
+                }
               })}
               className={`mt-1 block w-full rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 ${
                 errors.q4_target ? 'border-red-300' : 'border-gray-300'
@@ -952,7 +1011,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
             {errors.q4_target && (
               <p className="mt-1 text-sm text-red-600 flex items-center">
                 <AlertCircle className="h-4 w-4 mr-1 flex-shrink-0" />
-                {errors.q4_target.message || 'Q4 target is required'}
+                {errors.q4_target.message}
               </p>
             )}
             <p className="mt-1 text-xs text-gray-600">
@@ -962,19 +1021,19 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
           </div>
           
           <div className={`p-3 rounded-md ${
-            calculatedYearlyTarget === annualTarget ? 'bg-green-50' : 'bg-red-50'
+            Math.abs(calculatedYearlyTarget - annualTarget) < 0.01 ? 'bg-green-50' : 'bg-red-50'
           }`}>
             <label className={`block text-sm font-medium mb-1 ${
-              calculatedYearlyTarget === annualTarget ? 'text-green-700' : 'text-red-700'
+              Math.abs(calculatedYearlyTarget - annualTarget) < 0.01 ? 'text-green-700' : 'text-red-700'
             }`}>
               Calculated Annual Target
             </label>
             <div className={`mt-1 text-lg font-medium ${
-              calculatedYearlyTarget === annualTarget ? 'text-green-800' : 'text-red-800'
+              Math.abs(calculatedYearlyTarget - annualTarget) < 0.01 ? 'text-green-800' : 'text-red-800'
             }`}>
               {calculatedYearlyTarget}
             </div>
-            {calculatedYearlyTarget !== annualTarget && (
+            {Math.abs(calculatedYearlyTarget - annualTarget) >= 0.01 && (
               <p className="text-xs text-red-600 mt-1">
                 {targetType === 'cumulative' 
                   ? 'Sum of quarterly targets must equal annual target'
@@ -991,13 +1050,14 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
         <button
           type="button"
           onClick={onCancel}
+          disabled={isSubmitting}
           className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
         >
           {t('common.cancel')}
         </button>
         <button
           type="submit"
-          disabled={isSubmitting || !isFormValid()}
+          disabled={isSubmitting || !isFormValid() || !userOrgId || !isFormReady}
           className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {isSubmitting ? (
