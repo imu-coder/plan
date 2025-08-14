@@ -3,7 +3,7 @@ import { useForm, Controller } from 'react-hook-form';
 import { useQuery } from '@tanstack/react-query';
 import { useLanguage } from '../lib/i18n/LanguageContext';
 import { Loader, ArrowLeft, AlertCircle, Info } from 'lucide-react';
-import { initiatives, initiativeFeeds } from '../lib/api';
+import { initiatives, initiativeFeeds, auth } from '../lib/api';
 
 interface InitiativeFormProps {
   parentId: string;
@@ -80,13 +80,14 @@ const InitiativeForm: React.FC<InitiativeFormProps> = ({
   const selectedInitiativeFeed = watch('initiative_feed');
   const watchedWeight = watch('weight');
 
-  // Get user organization ID
+  // Get user organization ID and ensure it's available
   useEffect(() => {
     const fetchUserData = async () => {
       try {
         const authData = await auth.getCurrentUser();
         if (authData.userOrganizations && authData.userOrganizations.length > 0) {
           setUserOrgId(authData.userOrganizations[0].organization);
+          console.log('InitiativeForm: User organization ID set to:', authData.userOrganizations[0].organization);
         }
       } catch (error) {
         console.error('Failed to fetch user data:', error);
@@ -275,6 +276,13 @@ const InitiativeForm: React.FC<InitiativeFormProps> = ({
       setIsSubmitting(true);
       setError(null);
       
+      // Ensure we have user organization ID
+      if (!userOrgId) {
+        setError('User organization not found. Please refresh the page and try again.');
+        setIsSubmitting(false);
+        return;
+      }
+      
       // Validate that the weight doesn't exceed the remaining weight
       const currentWeight = Number(data.weight) || 0;
       if (currentWeight > weights.maxWeight) {
@@ -295,21 +303,44 @@ const InitiativeForm: React.FC<InitiativeFormProps> = ({
         ...data,
         weight: Number(data.weight),
         [parentType === 'objective' ? 'strategic_objective' : 'program']: parentId,
-        // CRITICAL FIX: Always assign organization for both create and update
-        is_default: initialData ? initialData.is_default : false, // Preserve is_default for updates
-        organization: userOrgId, // Always assign to user's organization
-        organization_id: userOrgId, // Also include organization_id for backend compatibility
+        // Organization assignment - critical for filtering
+        organization: userOrgId,
+        organization_id: userOrgId,
+        // Preserve is_default status for updates, set false for new initiatives
+        is_default: initialData?.is_default || false,
         // Include initiative_feed if selected from predefined list
         initiative_feed: useInitiativeFeed && selectedInitiativeFeed ? selectedInitiativeFeed : null
       };
 
       console.log('InitiativeForm: Submitting initiative with data:', submissionData);
-      console.log('InitiativeForm: Weight validation passed with custom parent weight:', effectiveParentWeight);
-      console.log('InitiativeForm: Saving initiative for organization:', userOrgId, initialData ? '(UPDATE)' : '(CREATE)');
+      console.log('InitiativeForm: Operation type:', initialData ? 'UPDATE' : 'CREATE');
+      console.log('InitiativeForm: Organization assignment:', userOrgId);
+      
       await onSubmit(submissionData);
+      
+      console.log('InitiativeForm: Successfully submitted initiative');
     } catch (error: any) {
       console.error('Error submitting initiative:', error);
-      setError(error.message || 'Failed to save initiative');
+      
+      // Better error handling
+      let errorMessage = 'Failed to save initiative';
+      if (error.response?.data) {
+        if (typeof error.response.data === 'string') {
+          errorMessage = error.response.data;
+        } else if (error.response.data.detail) {
+          errorMessage = error.response.data.detail;
+        } else if (error.response.data.message) {
+          errorMessage = error.response.data.message;
+        } else if (error.response.data.weight) {
+          errorMessage = Array.isArray(error.response.data.weight) 
+            ? error.response.data.weight[0] 
+            : error.response.data.weight;
+        }
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
+      setError(errorMessage);
     } finally {
       setIsSubmitting(false);
     }
@@ -572,6 +603,7 @@ const InitiativeForm: React.FC<InitiativeFormProps> = ({
           type="submit"
           disabled={
             isSubmitting || 
+            !userOrgId ||
             !weights.maxWeight || 
             weights.maxWeight <= 0 || 
             !watchedWeight || 
