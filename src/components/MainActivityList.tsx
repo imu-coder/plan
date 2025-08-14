@@ -59,6 +59,14 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
   const [refreshKey, setRefreshKey] = useState(0);
   const [editingSubActivity, setEditingSubActivity] = useState<any>(null);
 
+  console.log('MainActivityList received:', {
+    parentWeight,
+    parentType,
+    initiativeId,
+    isUserPlanner,
+    userOrgId
+  });
+
   // Fetch current user role and organization
   const { data: currentUser } = useQuery({
     queryKey: ['current-user'],
@@ -66,18 +74,26 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
     staleTime: 5 * 60 * 1000, // 5 minutes
   });
 
+  // Force refresh function for external use
+  const forceRefresh = () => {
+    console.log('Force refreshing activities list');
+    setRefreshKey(prev => prev + 1);
+    queryClient.invalidateQueries({ queryKey: ['main-activities', initiativeId] });
+    refetch();
+  };
+
   // Fetch all main activities for the given initiative
   const { data: activitiesList, isLoading, refetch, isFetching } = useQuery({
-    queryKey: ['main-activities', initiativeId, planKey, refreshKey, manualRefreshTrigger],
+    queryKey: ['main-activities', initiativeId, planKey, refreshKey],
     queryFn: async () => {
       if (!initiativeId) {
         console.log('Missing initiativeId, cannot fetch main activities');
         return { data: [] };
       }
       
-      console.log(`Fetching main activities for initiative ${initiativeId}`);
+      console.log(`Fetching activities for initiative ${initiativeId} (key: ${refreshKey})`);
       const response = await mainActivities.getByInitiative(initiativeId);
-      console.log('Fetched main activities:', response.data);
+      console.log('Fetched activities:', response.data?.length || 0, 'items');
       return response;
     },
     enabled: !!initiativeId,
