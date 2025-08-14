@@ -39,6 +39,51 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
     console.error('MainActivityForm Error:', message);
   };
 
+  // Target validation function
+  const validateTargets = () => {
+    try {
+      const baselineValue = baseline ? parseFloat(baseline) : null;
+
+      if (targetType === 'cumulative') {
+        const quarterly_sum = q1Target + q2Target + q3Target + q4Target;
+        if (Math.abs(quarterly_sum - annualTarget) > 0.01) {
+          return `For cumulative targets, sum of quarterly targets (${quarterly_sum}) must equal annual target (${annualTarget})`;
+        }
+      } else if (targetType === 'increasing') {
+        if (baselineValue !== null && q1Target < baselineValue) {
+          return `For increasing targets, Q1 target (${q1Target}) must be greater than or equal to baseline (${baselineValue})`;
+        }
+        if (!(q1Target <= q2Target && q2Target <= q3Target && q3Target <= q4Target)) {
+          return 'For increasing targets, quarterly targets must be in ascending order (Q1 ≤ Q2 ≤ Q3 ≤ Q4)';
+        }
+        if (Math.abs(q4Target - annualTarget) > 0.01) {
+          return `For increasing targets, Q4 target (${q4Target}) must equal annual target (${annualTarget})`;
+        }
+      } else if (targetType === 'decreasing') {
+        if (baselineValue !== null && q1Target > baselineValue) {
+          return `For decreasing targets, Q1 target (${q1Target}) must be less than or equal to baseline (${baselineValue})`;
+        }
+        if (!(q1Target >= q2Target && q2Target >= q3Target && q3Target >= q4Target)) {
+          return 'For decreasing targets, quarterly targets must be in descending order (Q1 ≥ Q2 ≥ Q3 ≥ Q4)';
+        }
+        if (Math.abs(q4Target - annualTarget) > 0.01) {
+          return `For decreasing targets, Q4 target (${q4Target}) must equal annual target (${annualTarget})`;
+        }
+      } else if (targetType === 'constant') {
+        if (!(Math.abs(q1Target - annualTarget) < 0.01 && 
+              Math.abs(q2Target - annualTarget) < 0.01 && 
+              Math.abs(q3Target - annualTarget) < 0.01 && 
+              Math.abs(q4Target - annualTarget) < 0.01)) {
+          return `For constant targets, all quarterly targets must equal annual target (Q1=Q2=Q3=Q4=${annualTarget})`;
+        }
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('Error in validateTargets:', error);
+      return 'Error validating targets. Please check your input values.';
+    }
+  };
   // Get user organization ID
   useEffect(() => {
     const fetchUserData = async () => {
@@ -251,15 +296,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
       }
 
       // Check other validation errors before submission
-      const validationErrors = getValidationErrors();
-      if (validationErrors.length > 0) {
-        setSubmitError(validationErrors[0]);
-        setIsSubmitting(false);
-        return;
-      }
-      
-      // Validate targets match target type
-      const targetError = validateTargetsLogic();
+      const targetError = validateTargets();
       if (targetError) {
         setSubmitError(targetError);
         setIsSubmitting(false);
