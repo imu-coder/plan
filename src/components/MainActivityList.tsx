@@ -47,6 +47,7 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
   const [userOrgId, setUserOrgId] = useState<number | null>(null);
   const [validationSuccess, setValidationSuccess] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [activitiesCount, setActivitiesCount] = useState(0);
   
   // Modal states
   const [selectedActivity, setSelectedActivity] = useState<MainActivity | null>(null);
@@ -58,7 +59,7 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
   const [selectedSubActivity, setSelectedSubActivity] = useState<any>(null);
   const [costingToolData, setCostingToolData] = useState<any>(null);
 
-  // Get user data
+  // Get user data on mount
   useEffect(() => {
     const fetchUserData = async () => {
       try {
@@ -76,52 +77,135 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
     fetchUserData();
   }, []);
 
-  // Fetch main activities
+  // Fetch main activities with proper caching and refresh
   const { data: activitiesList, isLoading, error, refetch } = useQuery({
-    queryKey: ['main-activities', initiativeId, refreshKey],
+    queryKey: ['main-activities', initiativeId],
     queryFn: async () => {
-      if (!initiativeId) return { data: [] };
+      if (!initiativeId) {
+        console.log('No initiativeId provided, returning empty data');
+        return { data: [] };
+      }
+      
       console.log(`Fetching main activities for initiative ${initiativeId}`);
-      const response = await mainActivities.getByInitiative(initiativeId);
-      console.log('Fetched activities:', response?.data?.length || 0);
-      return response;
+      try {
+        const response = await mainActivities.getByInitiative(initiativeId);
+        const activities = response?.data || [];
+        console.log(`Successfully fetched ${activities.length} main activities`);
+        
+        // Update activities count for immediate display detection
+        setActivitiesCount(activities.length);
+        
+        return response;
+      } catch (error) {
+        console.error('Error fetching main activities:', error);
+        throw error;
+      }
     },
     enabled: !!initiativeId,
-    staleTime: 1000,
+    staleTime: 1000, // Cache for 1 second
     refetchOnMount: true,
+    refetchOnWindowFocus: false,
+    retry: 2
   });
 
-  // Create sub-activity mutation
+  // Force refetch when external changes occur
+  useEffect(() => {
+    if (refreshKey > 0) {
+      console.log('External refresh triggered, refetching activities');
+      refetch();
+    }
+  }, [refreshKey, refetch]);
+
+  // Create sub-activity mutation with immediate cache update
   const createSubActivityMutation = useMutation({
     mutationFn: (subActivityData: any) => subActivities.create(subActivityData),
+    onMutate: async () => {
+      // Cancel any outgoing refetches (so they don't overwrite our optimistic update)
+      await queryClient.cancelQueries({ queryKey: ['main-activities', initiativeId] });
+    },
     onSuccess: () => {
-      console.log('Sub-activity created successfully, refreshing...');
+      console.log('Sub-activity created successfully, updating cache');
+      // Invalidate and refetch the main activities
       queryClient.invalidateQueries({ queryKey: ['main-activities', initiativeId] });
-      queryClient.refetchQueries({ queryKey: ['main-activities', initiativeId] });
+      // Force immediate refetch
+      refetch();
       closeAllModals();
+    },
+    onError: (error) => {
+      console.error('Failed to create sub-activity:', error);
+      // Refetch to ensure we have the latest data
+      refetch();
     }
   });
 
-  // Update sub-activity mutation
+  // Update sub-activity mutation with immediate cache update
   const updateSubActivityMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: any }) => subActivities.update(id, data),
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ['main-activities', initiativeId] });
+    },
     onSuccess: () => {
-      console.log('Sub-activity updated successfully, refreshing...');
+      console.log('Sub-activity updated successfully, updating cache');
       queryClient.invalidateQueries({ queryKey: ['main-activities', initiativeId] });
-      queryClient.refetchQueries({ queryKey: ['main-activities', initiativeId] });
+      refetch();
       closeAllModals();
+    },
+    onError: (error) => {
+      console.error('Failed to update sub-activity:', error);
+      refetch();
     }
   });
 
-  // Delete activity mutation
+  // Delete activity mutation with immediate cache update
   const deleteActivityMutation = useMutation({
     mutationFn: (activityId: string) => mainActivities.delete(activityId),
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ['main-activities', initiativeId] });
+    },
     onSuccess: () => {
-      console.log('Activity deleted successfully, refreshing...');
+      console.log('Activity deleted successfully, updating cache');
       queryClient.invalidateQueries({ queryKey: ['main-activities', initiativeId] });
-      queryClient.refetchQueries({ queryKey: ['main-activities', initiativeId] });
+      refetch();
+    },
+    onError: (error) => {
+      console.error('Failed to delete activity:', error);
+      refetch();
     }
   });
+
+  // Manual refresh function
+  const handleManualRefresh = () => {
+    console.log('Manual refresh triggered');
+    refetch();
+  };
+
+  // Safe data access with detailed logging
+  const activitiesData = activitiesList?.data;
+  console.log('MainActivityList render - Raw data:', {
+    activitiesList: activitiesList ? 'exists' : 'null',
+    activitiesData: activitiesData ? `${Array.isArray(activitiesData) ? activitiesData.length : 'not array'} items` : 'null',
+    userOrgId,
+    initiativeId
+  });
+
+  // Ensure we have valid array data
+  const safeActivitiesData = Array.isArray(activitiesData) ? activitiesData : [];
+
+  // Filter activities based on user organization with detailed logging
+  const filteredActivities = safeActivitiesData.filter(activity => {
+    if (!activity) {
+      console.log('Skipping null/undefined activity');
+      return false;
+    }
+    
+    const belongsToUserOrg = !activity.organization || activity.organization === userOrgId;
+    
+    console.log(`Activity "${activity.name}": organization=${activity.organization}, userOrg=${userOrgId}, belongs=${belongsToUserOrg}`);
+    
+    return belongsToUserOrg;
+  });
+
+  console.log(`MainActivityList: Showing ${filteredActivities.length} of ${safeActivitiesData.length} activities for user org ${userOrgId}`);
 
   // Close all modals
   const closeAllModals = () => {
@@ -137,12 +221,15 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
 
   // Handle add sub-activity click - Step 1: Show activity types
   const handleAddSubActivity = (activity: MainActivity) => {
+    console.log('Adding sub-activity to:', activity.name);
     setSelectedActivity(activity);
+    setSelectedSubActivity(null); // Clear any existing sub-activity
     setShowActivityTypeModal(true);
   };
 
   // Handle activity type selection - Step 2: Show costing modal
   const handleActivityTypeSelect = (activityType: string) => {
+    console.log('Activity type selected:', activityType);
     setSelectedActivityType(activityType);
     setShowActivityTypeModal(false);
     
@@ -173,6 +260,8 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
   // Handle budget form submission - Step 4: Save sub-activity
   const handleBudgetSubmit = async (budgetData: any) => {
     try {
+      console.log('Submitting budget data for sub-activity');
+      
       const subActivityData = {
         main_activity: selectedActivity?.id,
         name: budgetData.name || `${selectedActivityType} Activity`,
@@ -210,7 +299,9 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
   };
 
   // Handle view sub-activity - Show view modal
-  const handleViewSubActivity = (activity: MainActivity, subActivity: any) => {
+  const handleViewSubActivity = (activity: MainActivity, subActivity: any, e: React.MouseEvent) => {
+    e.stopPropagation();
+    console.log('Viewing sub-activity:', subActivity.name);
     setSelectedActivity(activity);
     setSelectedSubActivity(subActivity);
     setShowViewModal(true);
@@ -218,6 +309,7 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
 
   // Handle edit sub-activity - Start edit flow
   const handleEditSubActivity = (activity: MainActivity, subActivity: any) => {
+    console.log('Editing sub-activity:', subActivity.name);
     setSelectedActivity(activity);
     setSelectedSubActivity(subActivity);
     setSelectedActivityType(subActivity.activity_type || 'Other');
@@ -263,23 +355,29 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
     }
   };
 
-  // Safe data access
-  const activitiesData = activitiesList?.data;
-  if (!Array.isArray(activitiesData)) {
-    console.log('Activities data is not array:', activitiesData);
+  // Check if activities data is valid
+  if (!Array.isArray(safeActivitiesData)) {
+    console.warn('MainActivityList: Activities data is not an array:', activitiesData);
   }
 
-  // Filter activities based on user organization
-  const filteredActivities = React.useMemo(() => {
-    if (!activitiesData || !Array.isArray(activitiesData)) {
-      return [];
+  // Filter activities based on user organization with better logging
+  const filteredActivities = safeActivitiesData.filter(activity => {
+    if (!activity) {
+      console.log('MainActivityList: Skipping null/undefined activity');
+      return false;
     }
     
-    return activitiesData.filter(activity => {
-      const belongsToUserOrg = !activity.organization || activity.organization === userOrgId;
-      return belongsToUserOrg;
-    });
-  }, [activitiesData, userOrgId]);
+    // More permissive filtering - show if no organization set OR belongs to user org
+    const hasNoOrg = !activity.organization;
+    const belongsToUserOrg = activity.organization === userOrgId;
+    const shouldShow = hasNoOrg || belongsToUserOrg;
+    
+    console.log(`MainActivityList: Activity "${activity.name}": org=${activity.organization}, userOrg=${userOrgId}, hasNoOrg=${hasNoOrg}, belongsToUserOrg=${belongsToUserOrg}, shouldShow=${shouldShow}`);
+    
+    return shouldShow;
+  });
+
+  console.log(`MainActivityList: Final result - showing ${filteredActivities.length} of ${safeActivitiesData.length} activities for initiative ${initiativeId}`);
 
   // Calculate weight totals
   const totalActivitiesWeight = filteredActivities.reduce((sum, activity) => 
@@ -289,31 +387,6 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
   const maxAllowedWeight = parseFloat((initiativeWeight * 0.65).toFixed(2));
   const remainingWeight = parseFloat((maxAllowedWeight - totalActivitiesWeight).toFixed(2));
   const isWeightValid = totalActivitiesWeight <= maxAllowedWeight;
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center p-4">
-        <Loader className="h-5 w-5 animate-spin mr-2" />
-        <span>{t('common.loading')}</span>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="text-center p-8 text-red-500 bg-red-50 rounded-lg border border-red-200">
-        <AlertCircle className="h-12 w-12 mx-auto text-red-400 mb-4" />
-        <p className="text-lg mb-2">Error loading activities</p>
-        <p className="text-sm">Failed to load main activities. Please try again.</p>
-        <button
-          onClick={() => refetch()}
-          className="mt-4 px-4 py-2 bg-red-100 text-red-700 rounded-md hover:bg-red-200"
-        >
-          Try Again
-        </button>
-      </div>
-    );
-  }
 
   // Render costing tool based on activity type
   const renderCostingTool = () => {
@@ -340,7 +413,34 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
     }
   };
 
-  // If there are no activities yet, show empty state
+  // Loading state
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center p-4">
+        <Loader className="h-5 w-5 animate-spin mr-2" />
+        <span>{t('common.loading')}</span>
+      </div>
+    );
+  }
+
+  // Error state
+  if (error) {
+    return (
+      <div className="text-center p-8 text-red-500 bg-red-50 rounded-lg border border-red-200">
+        <AlertCircle className="h-12 w-12 mx-auto text-red-400 mb-4" />
+        <p className="text-lg mb-2">Error loading activities</p>
+        <p className="text-sm">Failed to load main activities. Please try again.</p>
+        <button
+          onClick={handleManualRefresh}
+          className="mt-4 px-4 py-2 bg-red-100 text-red-700 rounded-md hover:bg-red-200"
+        >
+          Try Again
+        </button>
+      </div>
+    );
+  }
+
+  // Empty state
   if (filteredActivities.length === 0) {
     return (
       <div className="space-y-4">
@@ -349,7 +449,16 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
             <h3 className="text-lg font-medium text-gray-900">
               Activity Weight Distribution (65% Rule)
             </h3>
-            <Activity className="h-5 w-5 text-gray-400" />
+            <div className="flex items-center space-x-2">
+              <Activity className="h-5 w-5 text-gray-400" />
+              <button
+                onClick={handleManualRefresh}
+                className="text-sm text-blue-600 hover:text-blue-800 flex items-center"
+                title="Refresh activities"
+              >
+                <Loader className="h-4 w-4" />
+              </button>
+            </div>
           </div>
           
           <div className="grid grid-cols-3 gap-4 text-center">
@@ -382,15 +491,24 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
           <p className="text-gray-500 mb-4">
             No main activities have been created yet for this initiative.
           </p>
-          {isUserPlanner && (
-            <button 
-              onClick={() => onEditActivity({} as MainActivity)}
-              className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700"
+          <div className="flex justify-center space-x-3">
+            <button
+              onClick={handleManualRefresh}
+              className="px-4 py-2 bg-blue-100 text-blue-700 rounded-md hover:bg-blue-200 flex items-center"
             >
-              <PlusCircle className="h-4 w-4 mr-2" />
-              Create First Main Activity
+              <Loader className="h-4 w-4 mr-2" />
+              Check Again
             </button>
-          )}
+            {isUserPlanner && (
+              <button 
+                onClick={() => onEditActivity({} as MainActivity)}
+                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700"
+              >
+                <PlusCircle className="h-4 w-4 mr-2" />
+                Create First Main Activity
+              </button>
+            )}
+          </div>
         </div>
       </div>
     );
@@ -404,7 +522,16 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
           <h3 className="text-lg font-medium text-gray-900">
             Activity Weight Distribution (65% Rule)
           </h3>
-          <Activity className="h-5 w-5 text-gray-400" />
+          <div className="flex items-center space-x-2">
+            <Activity className="h-5 w-5 text-gray-400" />
+            <button
+              onClick={handleManualRefresh}
+              className="text-sm text-blue-600 hover:text-blue-800 flex items-center"
+              title="Refresh activities"
+            >
+              <Loader className="h-4 w-4" />
+            </button>
+          </div>
         </div>
         
         <div className="grid grid-cols-3 gap-4 text-center">
@@ -428,7 +555,7 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
           <p className="text-sm text-blue-700 flex items-center">
             <Info className="h-4 w-4 mr-2" />
             <strong>65% Rule:</strong> Total activities weight must not exceed {maxAllowedWeight}% 
-            (65% of initiative weight {initiativeWeight}%).
+            (65% of initiative weight {initiativeWeight}%). Currently showing {filteredActivities.length} activities.
           </p>
         </div>
 
@@ -518,15 +645,18 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
                   </div>
                 </div>
                 
-                {/* Main Activity Edit/Delete Buttons */}
+                {/* Main Activity Edit/Delete Buttons - OUTSIDE sub-activity container */}
                 {isUserPlanner && (
                   <div className="flex space-x-2">
                     <button
-                      onClick={() => onEditActivity(activity)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onEditActivity(activity);
+                      }}
                       className="text-sm text-blue-600 hover:text-blue-800 flex items-center px-2 py-1 border border-blue-200 rounded"
                     >
                       <Edit className="h-4 w-4 mr-1" />
-                      Edit
+                      Edit Activity
                     </button>
                     <button
                       onClick={(e) => handleDeleteActivity(activity.id, e)}
@@ -538,7 +668,7 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
                       ) : (
                         <Trash2 className="h-4 w-4 mr-1" />
                       )}
-                      Delete
+                      Delete Activity
                     </button>
                   </div>
                 )}
@@ -597,13 +727,22 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
                 {subActivitiesList.length === 0 ? (
                   <div className="text-center p-4 bg-gray-50 rounded border-2 border-dashed border-gray-200">
                     <p className="text-sm text-gray-500">No sub-activities created yet</p>
+                    {isUserPlanner && (
+                      <button
+                        onClick={() => handleAddSubActivity(activity)}
+                        className="mt-2 text-sm text-green-600 hover:text-green-800"
+                      >
+                        Click here to add the first sub-activity
+                      </button>
+                    )}
                   </div>
                 ) : (
                   <div className="space-y-2">
                     {subActivitiesList.map((subActivity) => (
                       <div
                         key={subActivity.id}
-                        className="p-3 bg-white border border-gray-200 rounded hover:border-blue-300 transition-colors"
+                        onClick={(e) => handleViewSubActivity(activity, subActivity, e)}
+                        className="p-3 bg-white border border-gray-200 rounded hover:border-blue-300 transition-colors cursor-pointer"
                       >
                         <div className="flex items-center justify-between">
                           <div className="flex-1">
@@ -633,7 +772,10 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
                               
                               <div className="flex space-x-2">
                                 <button
-                                  onClick={() => handleViewSubActivity(activity, subActivity)}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleViewSubActivity(activity, subActivity, e);
+                                  }}
                                   className="text-xs text-blue-600 hover:text-blue-800 flex items-center"
                                 >
                                   <Eye className="h-3 w-3 mr-1" />
@@ -641,7 +783,10 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
                                 </button>
                                 {isUserPlanner && (
                                   <button
-                                    onClick={() => handleEditSubActivity(activity, subActivity)}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleEditSubActivity(activity, subActivity);
+                                    }}
                                     className="text-xs text-green-600 hover:text-green-800 flex items-center"
                                   >
                                     <Edit className="h-3 w-3 mr-1" />
