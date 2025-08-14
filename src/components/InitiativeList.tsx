@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { initiatives, auth } from '../lib/api';
+import { initiatives, auth, organizations } from '../lib/api';
 import { BarChart3, AlertCircle, CheckCircle, Edit, Trash2, Lock, PlusCircle, Building2, Info } from 'lucide-react';
 import { useLanguage } from '../lib/i18n/LanguageContext';
 import type { StrategicInitiative } from '../types/organization';
@@ -39,6 +39,7 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
   const [validationError, setValidationError] = useState<string | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [lastRefreshKey, setLastRefreshKey] = useState(refreshKey);
+  const [organizationsMap, setOrganizationsMap] = useState<Record<string, string>>({});
   
   console.log('InitiativeList received:', {
     parentWeight,
@@ -48,6 +49,31 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
     customWeight: selectedObjectiveData?.effective_weight || selectedObjectiveData?.planner_weight,
     refreshKey
   });
+
+  // Fetch organizations mapping for displaying names
+  useEffect(() => {
+    const fetchOrganizations = async () => {
+      try {
+        const response = await organizations.getAll();
+        const orgMap: Record<string, string> = {};
+        
+        if (response?.data && Array.isArray(response.data)) {
+          response.data.forEach((org: any) => {
+            if (org?.id) {
+              orgMap[String(org.id)] = org.name;
+            }
+          });
+        }
+        
+        setOrganizationsMap(orgMap);
+        console.log('Organizations map created for initiatives:', orgMap);
+      } catch (error) {
+        console.error('Failed to fetch organizations:', error);
+      }
+    };
+    
+    fetchOrganizations();
+  }, []);
 
   // Force refresh function for external use
   const forceRefresh = () => {
@@ -97,9 +123,23 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
       }
 
       console.log('Fetched initiatives:', response.data?.length || 0, 'items');
+      
+      // Enrich initiatives with organization names from the map
+      if (response?.data && Array.isArray(response.data)) {
+        response.data = response.data.map((initiative: any) => {
+          if (initiative.organization && organizationsMap[String(initiative.organization)]) {
+            return {
+              ...initiative,
+              organization_name: organizationsMap[String(initiative.organization)]
+            };
+          }
+          return initiative;
+        });
+      }
+      
       return response;
     },
-    enabled: !!parentId, // Only fetch when parentId is available
+    enabled: !!parentId && Object.keys(organizationsMap).length > 0, // Wait for both parentId and organizations
     staleTime: 0, // No cache to ensure fresh data
     cacheTime: 0, // No cache time to force fresh fetch
     refetchOnMount: true,
@@ -178,28 +218,36 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
   // CRITICAL FIX: Filter initiatives to show both default and user's organization initiatives
   const filteredInitiatives = (initiativesList.data || []).filter(initiative => {
     const isDefault = initiative.is_default === true;
-    const belongsToUserOrg = !initiative.organization || initiative.organization === userOrgId;
+    const belongsToUserOrg = !initiative.organization || Number(initiative.organization) === Number(userOrgId);
     const belongsToOtherOrg = initiative.organization && initiative.organization !== userOrgId;
     
     // Include if it's default OR belongs to user's org, but exclude if it belongs to another org
     const shouldInclude = (isDefault || belongsToUserOrg) && !belongsToOtherOrg;
     
     if (initiative.name) {
-      console.log(`Initiative "${initiative.name}": isDefault=${isDefault}, org=${initiative.organization}, userOrg=${userOrgId}, shouldInclude=${shouldInclude}`);
+      console.log(`Initiative "${initiative.name}": isDefault=${isDefault}, org=${initiative.organization}, userOrg=${userOrgId}, orgName=${initiative.organization_name || organizationsMap[String(initiative.organization)] || 'N/A'}, shouldInclude=${shouldInclude}`);
     }
     
     return shouldInclude;
   });
   
+  // Ensure organization names are displayed correctly
+  const enrichedInitiatives = filteredInitiatives.map(initiative => ({
+    ...initiative,
+    organization_name: initiative.organization_name || 
+                     organizationsMap[String(initiative.organization)] || 
+                     'Ministry of Health'
+  }));
+  
   console.log('InitiativeList: Weight calculation debug:', {
     totalInitiatives: initiativesList.data?.length || 0,
-    filteredInitiatives: filteredInitiatives.length,
+    filteredInitiatives: enrichedInitiatives.length,
     userOrgId,
     parentWeight,
     parentType
   });
   
-  const total_initiatives_weight = filteredInitiatives.reduce((sum, initiative) => 
+  const total_initiatives_weight = enrichedInitiatives.reduce((sum, initiative) => 
     sum + (Number(initiative.weight) || 0), 0
   );
   
@@ -209,7 +257,7 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
     parentWeight,
     total_initiatives_weight,
     remaining_weight,
-    filteredInitiativesCount: filteredInitiatives.length
+    filteredInitiativesCount: enrichedInitiatives.length
   });
   
   // Check if exactly equal to parent weight with a small epsilon for floating point comparison
@@ -220,13 +268,13 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
     : total_initiatives_weight <= parentWeight;
 
   // Group initiatives by default vs custom
-  const defaultInitiatives = filteredInitiatives.filter(i => i.is_default);
-  const customInitiatives = filteredInitiatives.filter(i => !i.is_default);
+  const defaultInitiatives = enrichedInitiatives.filter(i => i.is_default);
+  const customInitiatives = enrichedInitiatives.filter(i => !i.is_default);
 
   console.log(`Grouped initiatives: ${defaultInitiatives.length} default, ${customInitiatives.length} custom`);
 
   // If there are no initiatives yet, show empty state
-  if (filteredInitiatives.length === 0) {
+  if (enrichedInitiatives.length === 0) {
     return (
       <div className="space-y-4">
         <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
@@ -383,7 +431,7 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
             <button
               onClick={handleValidateInitiatives}
               disabled={
-                filteredInitiatives.length === 0 ||
+                enrichedInitiatives.length === 0 ||
                 (parentType === 'objective' && Math.abs(total_initiatives_weight - parentWeight) >= 0.01)
               }
               className="w-full py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -393,7 +441,7 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
                 : 'Validate Initiatives Weight'}
             </button>
             
-            {parentType === 'objective' && Math.abs(total_initiatives_weight - parentWeight) >= 0.01 && filteredInitiatives.length > 0 && (
+            {parentType === 'objective' && Math.abs(total_initiatives_weight - parentWeight) >= 0.01 && enrichedInitiatives.length > 0 && (
               <p className="mt-2 text-xs text-amber-600 text-center">
                 {remaining_weight > 0 
                   ? `Add more initiatives to reach exactly ${parentWeight}% total weight`
@@ -447,7 +495,7 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
                 {initiative.organization_name && (
                   <div className="mb-2 flex items-center text-sm text-gray-600">
                     <Building2 className="h-4 w-4 mr-1 text-gray-500" />
-                    <span>{initiative.organization_name}</span>
+                    <span>{initiative.organization_name || 'Ministry of Health'}</span>
                   </div>
                 )}
                 
@@ -525,7 +573,7 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
                 {initiative.organization_name && (
                   <div className="mb-2 flex items-center text-sm text-gray-600">
                     <Building2 className="h-4 w-4 mr-1 text-gray-500" />
-                    <span>{initiative.organization_name}</span>
+                    <span>{initiative.organization_name || 'Ministry of Health'}</span>
                   </div>
                 )}
                 
@@ -575,7 +623,7 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
             className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <PlusCircle className="h-4 w-4 mr-2" />
-            {filteredInitiatives.length === 0 ? 'Create First Initiative' : 
+            {enrichedInitiatives.length === 0 ? 'Create First Initiative' : 
              remaining_weight <= 0.01 ? `No Weight Available (${remaining_weight.toFixed(1)}%)` :
              'Create New Initiative'}
           </button>

@@ -79,7 +79,7 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
 
   // Fetch main activities with proper caching and refresh
   const { data: activitiesList, isLoading, error, refetch } = useQuery({
-    queryKey: ['main-activities', initiativeId],
+    queryKey: ['main-activities', initiativeId, refreshKey],
     queryFn: async () => {
       if (!initiativeId) {
         console.log('No initiativeId provided, returning empty data');
@@ -102,10 +102,12 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
       }
     },
     enabled: !!initiativeId,
-    staleTime: 1000, // Cache for 1 second
+    staleTime: 0, // No cache to ensure fresh data
+    cacheTime: 0, // No cache time to force fresh fetch
     refetchOnMount: true,
     refetchOnWindowFocus: false,
-    retry: 2
+    retry: 2,
+    refetchInterval: false
   });
 
   // Force refetch when external changes occur
@@ -119,10 +121,6 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
   // Create sub-activity mutation with immediate cache update
   const createSubActivityMutation = useMutation({
     mutationFn: (subActivityData: any) => subActivities.create(subActivityData),
-    onMutate: async () => {
-      // Cancel any outgoing refetches (so they don't overwrite our optimistic update)
-      await queryClient.cancelQueries({ queryKey: ['main-activities', initiativeId] });
-    },
     onSuccess: () => {
       console.log('Sub-activity created successfully, updating cache');
       // Invalidate and refetch the main activities
@@ -141,9 +139,6 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
   // Update sub-activity mutation with immediate cache update
   const updateSubActivityMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: any }) => subActivities.update(id, data),
-    onMutate: async () => {
-      await queryClient.cancelQueries({ queryKey: ['main-activities', initiativeId] });
-    },
     onSuccess: () => {
       console.log('Sub-activity updated successfully, updating cache');
       queryClient.invalidateQueries({ queryKey: ['main-activities', initiativeId] });
@@ -159,9 +154,6 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
   // Delete activity mutation with immediate cache update
   const deleteActivityMutation = useMutation({
     mutationFn: (activityId: string) => mainActivities.delete(activityId),
-    onMutate: async () => {
-      await queryClient.cancelQueries({ queryKey: ['main-activities', initiativeId] });
-    },
     onSuccess: () => {
       console.log('Activity deleted successfully, updating cache');
       queryClient.invalidateQueries({ queryKey: ['main-activities', initiativeId] });
@@ -198,14 +190,23 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
       return false;
     }
     
-    const belongsToUserOrg = !activity.organization || activity.organization === userOrgId;
+    // More permissive filtering: show activities with no organization OR user's organization
+    const hasNoOrganization = !activity.organization;
+    const belongsToUserOrg = activity.organization && Number(activity.organization) === Number(userOrgId);
+    const shouldInclude = hasNoOrganization || belongsToUserOrg;
     
-    console.log(`Activity "${activity.name}": organization=${activity.organization}, userOrg=${userOrgId}, belongs=${belongsToUserOrg}`);
+    console.log(`Activity "${activity.name}": organization=${activity.organization}, userOrg=${userOrgId}, hasNoOrg=${hasNoOrganization}, belongsToUserOrg=${belongsToUserOrg}, shouldInclude=${shouldInclude}`);
     
-    return belongsToUserOrg;
+    return shouldInclude;
   });
 
-  console.log(`MainActivityList: Showing ${filteredActivities.length} of ${safeActivitiesData.length} activities for user org ${userOrgId}`);
+  console.log(`MainActivityList: Showing ${filteredActivities.length} of ${safeActivitiesData.length} activities for user org ${userOrgId}`, {
+    initiativeId,
+    isLoading,
+    error: error ? 'yes' : 'no',
+    rawDataLength: safeActivitiesData.length,
+    filteredLength: filteredActivities.length
+  });
 
   // Close all modals
   const closeAllModals = () => {
@@ -500,12 +501,14 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
           </h3>
           <div className="flex items-center space-x-2">
             <Activity className="h-5 w-5 text-gray-400" />
+            <span className="text-xs text-gray-500">({filteredActivities.length} activities)</span>
             <button
               onClick={handleManualRefresh}
+              disabled={isLoading || isFetching}
               className="text-sm text-blue-600 hover:text-blue-800 flex items-center"
               title="Refresh activities"
             >
-              <Loader className="h-4 w-4" />
+              <Loader className={`h-4 w-4 ${isLoading || isFetching ? 'animate-spin' : ''}`} />
             </button>
           </div>
         </div>
@@ -561,6 +564,7 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
           <div className="mt-4">
             <button
               onClick={handleValidateActivities}
+              disabled={isLoading || isFetching}
               className="w-full py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-orange-600 hover:bg-orange-700"
             >
               Validate Activities Weight ({totalActivitiesWeight.toFixed(1)}% / {maxAllowedWeight}%)
@@ -570,12 +574,15 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
       </div>
 
       {/* Main Activities List */}
-      <div className="space-y-3">
+      <div className="space-y-3" key={`activities-${refreshKey}-${filteredActivities.length}`}>
         <h3 className="text-sm font-medium text-gray-700 flex items-center">
           <span className="inline-flex items-center px-2.5 py-0.5 mr-2 rounded-full text-xs font-medium bg-orange-100 text-orange-800">
             Activities ({filteredActivities.length})
           </span>
           Main Activities
+          {(isLoading || isFetching) && (
+            <Loader className="h-4 w-4 ml-2 animate-spin text-blue-500" />
+          )}
         </h3>
         
         {filteredActivities.map((activity) => {
