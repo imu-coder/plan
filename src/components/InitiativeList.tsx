@@ -1,10 +1,9 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { initiatives } from '../lib/api';
+import { initiatives, auth } from '../lib/api';
 import { BarChart3, AlertCircle, CheckCircle, Edit, Trash2, Lock, PlusCircle, Building2, Info } from 'lucide-react';
 import { useLanguage } from '../lib/i18n/LanguageContext';
 import type { StrategicInitiative } from '../types/organization';
-import { auth } from '../lib/api';
 import { isPlanner } from '../types/user';
 
 interface InitiativeListProps {
