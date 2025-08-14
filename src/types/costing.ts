@@ -114,6 +114,8 @@ interface SupervisionCost {
   numberOfDays: number;
   numberOfSupervisors: number;
   numberOfSupervisorsWithAdditionalCost: number;
+  costMode?: 'perdiem' | 'accommodation';
+  accommodationType?: 'LUNCH' | 'HALL_REFRESHMENT' | 'DINNER' | 'BED' | 'FULL_BOARD';
   additionalSupervisorCosts: SupervisorCost[];
   transportRequired: boolean;
   landTransportSupervisors?: number;
@@ -121,6 +123,9 @@ interface SupervisionCost {
   otherCosts: number;
   justification?: string;
   totalBudget?: number;
+  additionalLocations?: any[];
+  landTransportRoutes?: any[];
+  airTransportRoutes?: any[];
 }
 
 export interface PrintingCost {

@@ -56,6 +56,7 @@ const SupervisionCostingTool: React.FC<SupervisionCostingToolProps> = ({
   const [airTransportRoutes, setAirTransportRoutes] = useState<TransportRoute[]>([]);
   const [additionalLocations, setAdditionalLocations] = useState<SupervisionLocation[]>([]);
   const [apiBaseUrl, setApiBaseUrl] = useState<string>('');
+  const [costMode, setCostMode] = useState<'perdiem' | 'accommodation'>('perdiem');
   
   const { register, watch, control, setValue, handleSubmit, formState: { errors }, trigger, getValues } = useForm<SupervisionCost>({
     defaultValues: initialData || {
@@ -64,6 +65,7 @@ const SupervisionCostingTool: React.FC<SupervisionCostingToolProps> = ({
       numberOfSupervisors: 1,
       numberOfSessions: 1,
       location: '',
+      costMode: 'perdiem',
       numberOfSupervisorsWithAdditionalCost: 0,
       additionalSupervisorCosts: [],
       transportRequired: false,
@@ -161,6 +163,11 @@ const SupervisionCostingTool: React.FC<SupervisionCostingToolProps> = ({
         if (initialData?.airTransportRoutes && Array.isArray(initialData.airTransportRoutes)) {
           setAirTransportRoutes(initialData.airTransportRoutes);
         }
+        
+        // Initialize cost mode if provided in initial data
+        if (initialData?.costMode) {
+          setCostMode(initialData.costMode);
+        }
 
       } catch (error) {
         console.error('Failed to fetch supervision costing data:', error);
@@ -213,39 +220,45 @@ const SupervisionCostingTool: React.FC<SupervisionCostingToolProps> = ({
       
       // Main location costs
       if (locationId) {
-        // Per diem costs
-        const perDiemData = perDiemsData.find(pd => pd.location == locationId);
-        if (perDiemData) {
-          const perDiemCost = Number(perDiemData.amount) || 0;
-          const hardshipAllowance = Number(perDiemData.hardship_allowance_amount) || 0;
-          totalCost += (perDiemCost + hardshipAllowance) * supervisors * days;
-        }
-        
-        // Accommodation costs
-        const accommodationData = accommodationsData.find(acc => 
-          acc.location == locationId && acc.service_type === 'FULL_BOARD'
-        );
-        if (accommodationData) {
-          const accommodationCost = Number(accommodationData.price) || 0;
-          totalCost += accommodationCost * supervisors * days;
+        if (costMode === 'perdiem') {
+          // Per diem costs
+          const perDiemData = perDiemsData.find(pd => pd.location == locationId);
+          if (perDiemData) {
+            const perDiemCost = Number(perDiemData.amount) || 0;
+            const hardshipAllowance = Number(perDiemData.hardship_allowance_amount) || 0;
+            totalCost += (perDiemCost + hardshipAllowance) * supervisors * days;
+          }
+        } else {
+          // Accommodation costs - use selected accommodation type
+          const selectedAccommodationType = allFormValues.accommodationType || 'FULL_BOARD';
+          const accommodationData = accommodationsData.find(acc => 
+            acc.location == locationId && acc.service_type === selectedAccommodationType
+          );
+          if (accommodationData) {
+            const accommodationCost = Number(accommodationData.price) || 0;
+            totalCost += accommodationCost * supervisors * days;
+          }
         }
       }
       
       // Additional locations costs
       additionalLocations.forEach(addLocation => {
-        const perDiemData = perDiemsData.find(pd => pd.location == addLocation.locationId);
-        if (perDiemData) {
-          const perDiemCost = Number(perDiemData.amount) || 0;
-          const hardshipAllowance = Number(perDiemData.hardship_allowance_amount) || 0;
-          totalCost += (perDiemCost + hardshipAllowance) * addLocation.supervisors * addLocation.days;
-        }
-        
-        const accommodationData = accommodationsData.find(acc => 
-          acc.location == addLocation.locationId && acc.service_type === 'FULL_BOARD'
-        );
-        if (accommodationData) {
-          const accommodationCost = Number(accommodationData.price) || 0;
-          totalCost += accommodationCost * addLocation.supervisors * addLocation.days;
+        if (costMode === 'perdiem') {
+          const perDiemData = perDiemsData.find(pd => pd.location == addLocation.locationId);
+          if (perDiemData) {
+            const perDiemCost = Number(perDiemData.amount) || 0;
+            const hardshipAllowance = Number(perDiemData.hardship_allowance_amount) || 0;
+            totalCost += (perDiemCost + hardshipAllowance) * addLocation.supervisors * addLocation.days;
+          }
+        } else {
+          const selectedAccommodationType = allFormValues.accommodationType || 'FULL_BOARD';
+          const accommodationData = accommodationsData.find(acc => 
+            acc.location == addLocation.locationId && acc.service_type === selectedAccommodationType
+          );
+          if (accommodationData) {
+            const accommodationCost = Number(accommodationData.price) || 0;
+            totalCost += accommodationCost * addLocation.supervisors * addLocation.days;
+          }
         }
       });
       
@@ -291,6 +304,7 @@ const SupervisionCostingTool: React.FC<SupervisionCostingToolProps> = ({
     additionalLocations, 
     landTransportRoutes, 
     airTransportRoutes,
+    costMode,
     perDiemsData,
     accommodationsData,
     supervisorCostsData,
@@ -448,11 +462,13 @@ const SupervisionCostingTool: React.FC<SupervisionCostingToolProps> = ({
         additionalLocations,
         landTransportRoutes,
         airTransportRoutes,
+        costMode,
         supervision_details: {
           description: data.description,
           numberOfDays: Number(data.numberOfDays),
           numberOfSupervisors: Number(data.numberOfSupervisors),
           location: data.location,
+          costMode,
           additionalLocations,
           landTransportRoutes,
           airTransportRoutes,
@@ -558,6 +574,78 @@ const SupervisionCostingTool: React.FC<SupervisionCostingToolProps> = ({
         )}
       </div>
 
+      {/* Cost Mode Selection */}
+      <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+        <label className="block text-sm font-medium text-gray-700 mb-3">
+          Cost Calculation Mode
+        </label>
+        <div className="grid grid-cols-2 gap-4">
+          <label className="relative flex items-center p-4 border rounded-lg cursor-pointer">
+            <input
+              type="radio"
+              name="costMode"
+              value="perdiem"
+              checked={costMode === 'perdiem'}
+              onChange={() => setCostMode('perdiem')}
+              className="sr-only"
+            />
+            <div className={`flex items-center ${costMode === 'perdiem' ? 'text-blue-600' : 'text-gray-500'}`}>
+              <DollarSign className="h-5 w-5 mr-2" />
+              <div>
+                <p className="font-medium">Per Diem Mode</p>
+                <p className="text-sm">Calculate based on daily allowances</p>
+              </div>
+            </div>
+            {costMode === 'perdiem' && (
+              <div className="absolute inset-0 border-2 border-blue-500 rounded-lg pointer-events-none" />
+            )}
+          </label>
+
+          <label className="relative flex items-center p-4 border rounded-lg cursor-pointer">
+            <input
+              type="radio"
+              name="costMode"
+              value="accommodation"
+              checked={costMode === 'accommodation'}
+              onChange={() => setCostMode('accommodation')}
+              className="sr-only"
+            />
+            <div className={`flex items-center ${costMode === 'accommodation' ? 'text-green-600' : 'text-gray-500'}`}>
+              <DollarSign className="h-5 w-5 mr-2" />
+              <div>
+                <p className="font-medium">Accommodation Mode</p>
+                <p className="text-sm">Calculate based on accommodation services</p>
+              </div>
+            </div>
+            {costMode === 'accommodation' && (
+              <div className="absolute inset-0 border-2 border-green-500 rounded-lg pointer-events-none" />
+            )}
+          </label>
+        </div>
+      </div>
+
+      {/* Accommodation Type Selection - Only show in accommodation mode */}
+      {costMode === 'accommodation' && (
+        <div>
+          <label className="block text-sm font-medium text-gray-700">
+            Accommodation Service Type
+          </label>
+          <select
+            {...register('accommodationType')}
+            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+          >
+            <option value="LUNCH">Lunch</option>
+            <option value="HALL_REFRESHMENT">Hall with Refreshment</option>
+            <option value="DINNER">Dinner</option>
+            <option value="BED">Bed</option>
+            <option value="FULL_BOARD">Full Board</option>
+          </select>
+          <p className="mt-1 text-xs text-gray-500">
+            Select the type of accommodation service for cost calculation
+          </p>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div>
           <label className="block text-sm font-medium text-gray-700">
@@ -618,6 +706,7 @@ const SupervisionCostingTool: React.FC<SupervisionCostingToolProps> = ({
             <p className="mt-1 text-sm text-red-600">{errors.numberOfSupervisorsWithAdditionalCost.message}</p>
           )}
         </div>
+                          {loc.is_hardship_area && ' (Hardship Area)'}
       </div>
 
       {/* Additional Locations Section */}
@@ -642,6 +731,31 @@ const SupervisionCostingTool: React.FC<SupervisionCostingToolProps> = ({
             {additionalLocations.map((location, index) => (
               <div key={index} className="flex items-center space-x-4 bg-white p-3 rounded border">
                 <div className="flex-1">
+                  <div className="text-xs text-gray-500">
+                    {(() => {
+                      if (!location.locationId) return 'Select location';
+                      
+                      if (costMode === 'perdiem') {
+                        const perDiemData = perDiemsData.find(pd => pd.location == location.locationId);
+                        if (perDiemData) {
+                          const dailyCost = Number(perDiemData.amount) + Number(perDiemData.hardship_allowance_amount || 0);
+                          const totalCost = dailyCost * location.supervisors * location.days;
+                          return `ETB ${totalCost.toLocaleString()}`;
+                        }
+                      } else {
+                        const selectedAccommodationType = allFormValues.accommodationType || 'FULL_BOARD';
+                        const accommodationData = accommodationsData.find(acc => 
+                          acc.location == location.locationId && acc.service_type === selectedAccommodationType
+                        );
+                        if (accommodationData) {
+                          const dailyCost = Number(accommodationData.price);
+                          const totalCost = dailyCost * location.supervisors * location.days;
+                          return `ETB ${totalCost.toLocaleString()}`;
+                        }
+                      }
+                      return 'No rate found';
+                    })()}
+                  </div>
                   <select
                     value={location.locationId}
                     onChange={(e) => updateAdditionalLocation(index, 'locationId', e.target.value)}
@@ -917,6 +1031,19 @@ const SupervisionCostingTool: React.FC<SupervisionCostingToolProps> = ({
               </div>
             )}
           </div>
+          
+          {/* Cost Mode Information */}
+          <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-md">
+            <p className="text-sm text-blue-700 flex items-center">
+              <Info className="h-4 w-4 mr-2" />
+              <span>
+                {costMode === 'perdiem' 
+                  ? 'Calculating costs based on per diem rates (including hardship allowance where applicable)'
+                  : `Calculating costs based on ${allFormValues.accommodationType || 'FULL_BOARD'} accommodation rates`
+                }
+              </span>
+            </p>
+          </div>
         </div>
       )}
 
@@ -989,7 +1116,7 @@ const SupervisionCostingTool: React.FC<SupervisionCostingToolProps> = ({
         </div>
         <p className="mt-2 text-sm text-gray-500 flex items-center">
           <Info className="h-4 w-4 mr-1" />
-          This total is calculated based on supervision days, supervisors, locations, and standard rates
+          This total is calculated based on supervision days, supervisors, locations, and {costMode === 'perdiem' ? 'per diem' : 'accommodation'} rates
         </p>
       </div>
     </form>
