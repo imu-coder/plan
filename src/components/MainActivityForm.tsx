@@ -171,7 +171,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
       ? (q1Target === q2Target && q2Target === q3Target && q3Target === q4Target && q1Target === annualTarget ? annualTarget : 0)
       : q4Target;
 
-  // Target validation function
+  // Target validation function - SINGLE IMPLEMENTATION
   const validateTargets = () => {
     try {
       const baselineValue = baseline ? parseFloat(baseline) : null;
@@ -268,6 +268,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
     
     try {
       console.log('MainActivityForm: Starting form submission...');
+      console.log('Form data received:', data);
       
       // Ensure we have user organization ID
       if (!userOrgId) {
@@ -334,35 +335,44 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
         throw new Error('Authentication error. Please refresh the page and try again.');
       }
 
-      // Prepare clean activity data with proper validation
+      // CRITICAL FIX: Prepare data exactly as Django model expects
       const cleanActivityData = {
+        // Required fields - ensure they match Django model exactly
         name: String(data.name).trim(),
+        initiative: String(initiativeId), // Must be string for Django ForeignKey
+        weight: String(parseFloat(String(data.weight || 0)).toFixed(2)), // Convert to string with 2 decimals
         baseline: String(data.baseline).trim(),
-        weight: parseFloat(String(data.weight || 0)),
         target_type: String(data.target_type || 'cumulative'),
-        q1_target: parseFloat(String(data.q1_target || 0)),
-        q2_target: parseFloat(String(data.q2_target || 0)),
-        q3_target: parseFloat(String(data.q3_target || 0)),
-        q4_target: parseFloat(String(data.q4_target || 0)),
-        annual_target: parseFloat(String(data.annual_target || 0)),
-        initiative: String(initiativeId),
+        
+        // Quarterly targets - ensure they're strings with proper decimal formatting
+        q1_target: String(parseFloat(String(data.q1_target || 0)).toFixed(2)),
+        q2_target: String(parseFloat(String(data.q2_target || 0)).toFixed(2)),
+        q3_target: String(parseFloat(String(data.q3_target || 0)).toFixed(2)),
+        q4_target: String(parseFloat(String(data.q4_target || 0)).toFixed(2)),
+        annual_target: String(parseFloat(String(data.annual_target || 0)).toFixed(2)),
+        
+        // Organization - must be integer for Django
         organization: Number(userOrgId),
-        organization_id: Number(userOrgId),
-        // Period selection based on type - ensure arrays
+        
+        // Period selection - ensure proper arrays
         selected_months: periodType === 'months' ? (data.selected_months || []) : [],
         selected_quarters: periodType === 'quarters' ? (data.selected_quarters || []) : [],
       };
       
-      // Final validation before submission
+      console.log('MainActivityForm: Prepared clean data for Django:', cleanActivityData);
+      
+      // Additional validation before submission
       if (!cleanActivityData.name || cleanActivityData.name.length < 3) {
         throw new Error('Activity name must be at least 3 characters long');
       }
       
-      if (isNaN(cleanActivityData.weight) || cleanActivityData.weight <= 0 || cleanActivityData.weight > 100) {
+      const weightNum = parseFloat(cleanActivityData.weight);
+      if (isNaN(weightNum) || weightNum <= 0 || weightNum > 100) {
         throw new Error('Weight must be a valid number between 0.01 and 100');
       }
       
-      if (isNaN(cleanActivityData.annual_target) || cleanActivityData.annual_target <= 0) {
+      const annualNum = parseFloat(cleanActivityData.annual_target);
+      if (isNaN(annualNum) || annualNum <= 0) {
         throw new Error('Annual target must be a valid number greater than 0');
       }
 
@@ -382,21 +392,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
         throw new Error('At least one month or quarter must be selected');
       }
 
-      console.log('MainActivityForm: Submitting clean activity data:', {
-        operation: initialData ? 'UPDATE' : 'CREATE',
-        activityId: initialData?.id,
-        name: cleanActivityData.name,
-        weight: cleanActivityData.weight,
-        organization: cleanActivityData.organization,
-        initiative: cleanActivityData.initiative,
-        target_type: cleanActivityData.target_type,
-        baseline: cleanActivityData.baseline,
-        annual_target: cleanActivityData.annual_target,
-        periods: {
-          months: cleanActivityData.selected_months?.length || 0,
-          quarters: cleanActivityData.selected_quarters?.length || 0
-        }
-      });
+      console.log('MainActivityForm: Final validation passed, submitting to parent...');
       
       // Call parent onSubmit with clean data
       await onSubmit(cleanActivityData);
