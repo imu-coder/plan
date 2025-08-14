@@ -100,10 +100,26 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
 
   // Calculate weights
   const expectedActivitiesWeight = parseFloat((initiativeWeight * 0.65).toFixed(2));
+  
+  // Fix weight calculation for editing vs creating
   const safeCurrentTotal = typeof currentTotal === 'number' ? currentTotal : 0;
   const safeInitialWeight = initialData?.weight || 0;
-  const adjustedCurrentTotal = initialData ? safeCurrentTotal - safeInitialWeight : safeCurrentTotal;
-  const maxWeight = Math.max(0, expectedActivitiesWeight - adjustedCurrentTotal);
+  
+  // When editing, subtract the current activity's weight from total
+  const otherActivitiesWeight = initialData ? safeCurrentTotal - safeInitialWeight : safeCurrentTotal;
+  const availableWeight = expectedActivitiesWeight - otherActivitiesWeight;
+  const maxWeight = Math.max(0, availableWeight);
+  
+  console.log('Weight calculation debug:', {
+    initiativeWeight,
+    expectedActivitiesWeight,
+    safeCurrentTotal,
+    safeInitialWeight, 
+    otherActivitiesWeight,
+    availableWeight,
+    maxWeight,
+    isEditing: !!initialData
+  });
 
   // Watch form fields
   const selectedMonths = watch('selected_months') || [];
