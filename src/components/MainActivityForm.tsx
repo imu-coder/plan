@@ -161,7 +161,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
       }
     } else if (targetType === 'decreasing') {
       // Q1 must equal baseline
-      if (baselineValue !== null && !(q1Target !<= baselineValue)) {
+      if (baselineValue !== null && !(q1Target <= baselineValue)) {
         return(`For decreasing targets, Q1 target (${q1Target}) must equal or lessthan baseline (${baselineValue})`);
       }
       if (!(q1Target >= q2Target && q2Target >= q3Target && q3Target >= q4Target)) {
@@ -593,7 +593,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
               <p className="ml-4">Example: If annual target=50, you must set Q1=50, Q2=50, Q3=50, Q4=50.</p>
             </>
           )}
-        }
+        </div>
       </div>
 
       {/* Validation Errors */}
