@@ -138,46 +138,6 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
       ? (q1Target === q2Target && q2Target === q3Target && q3Target === q4Target && q1Target === annualTarget ? annualTarget : 0)
       : q4Target;
 
-  // Validate targets function
-  const validateTargets = () => {
-    const baselineValue = baseline ? Number(baseline) : null;
-
-    if (targetType === 'cumulative') {
-      const quarterly_sum = q1Target + q2Target + q3Target + q4Target;
-      if (quarterly_sum !== annualTarget) {
-        return `For cumulative targets, sum of quarterly targets (${quarterly_sum}) must equal annual target (${annualTarget})`;
-      }
-    } else if (targetType === 'increasing') {
-      // Q1 must equal baseline
-      if (baselineValue !== null && !(q1Target >= baselineValue)) {
-        return(`For increasing targets, Q1 target (${q1Target}) must equal or greaterthan baseline (${baselineValue})`);
-        
-      }
-      if (!(q1Target <= q2Target && q2Target <= q3Target && q3Target <= q4Target)) {
-        return 'For increasing targets, quarterly targets must be in ascending order (Q1 ≤ Q2 ≤ Q3 ≤ Q4)';
-      }
-      if (q4Target !== annualTarget) {
-        return `For increasing targets, Q4 target (${q4Target}) must equal annual target (${annualTarget})`;
-      }
-    } else if (targetType === 'decreasing') {
-      // Q1 must equal baseline
-      if (baselineValue !== null && !(q1Target <= baselineValue)) {
-        return(`For decreasing targets, Q1 target (${q1Target}) must equal or lessthan baseline (${baselineValue})`);
-      }
-      if (!(q1Target >= q2Target && q2Target >= q3Target && q3Target >= q4Target)) {
-        return 'For decreasing targets, quarterly targets must be in descending order (Q1 ≥ Q2 ≥ Q3 ≥ Q4)';
-      }
-      if (q4Target !== annualTarget) {
-        return `For decreasing targets, Q4 target (${q4Target}) must equal annual target (${annualTarget})`;
-      }
-    } else if (targetType === 'constant') {
-      if (!(q1Target === q2Target && q2Target === q3Target && q3Target === q4Target && q1Target === annualTarget)) {
-        return `For constant targets, all quarterly targets must equal annual target (Q1=Q2=Q3=Q4=${annualTarget})`;
-      }
-    }
-    return null;
-  };
-
   // Check if form is valid
   const getValidationErrors = () => {
     const errors: string[] = [];
@@ -209,8 +169,18 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
   };
   
   const validationErrors = getValidationErrors();
+  
+  // Enhanced form validation function
   const isFormValid = () => {
-    return validationErrors.length === 0 && calculatedYearlyTarget === annualTarget;
+    try {
+      return validationErrors.length === 0 && 
+             Math.abs(calculatedYearlyTarget - annualTarget) < 0.01 &&
+             userOrgId !== null &&
+             isFormReady;
+    } catch (error) {
+      console.error('Error in isFormValid:', error);
+      return false;
+    }
   };
 
   const handleFormSubmit = async (data: Partial<MainActivity>) => {
@@ -289,7 +259,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
       }
       
       // Validate targets match target type
-      const targetError = validateTargets();
+      const targetError = validateTargetsLogic();
       if (targetError) {
         setSubmitError(targetError);
         setIsSubmitting(false);
@@ -351,12 +321,6 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
       console.log('MainActivityForm: Successfully submitted activity');
     } catch (error: any) {
       console.error('Error submitting form:', error);
-      console.error('Error details:', {
-        message: error.message,
-        response: error.response?.data,
-        status: error.response?.status,
-        config: error.config
-      });
       
       // Enhanced error handling for production
       let errorMessage = 'Failed to save activity.';
@@ -425,7 +389,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
   };
 
   // Enhanced validation function
-  const validateTargets = () => {
+  const validateTargetsLogic = () => {
     try {
       const baselineValue = baseline ? parseFloat(baseline) : null;
 
@@ -435,7 +399,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
           return `For cumulative targets, sum of quarterly targets (${quarterly_sum}) must equal annual target (${annualTarget})`;
         }
       } else if (targetType === 'increasing') {
-        // Q1 must be greater than or equal to baseline
+        // Q1 must equal or be greater than baseline
         if (baselineValue !== null && q1Target < baselineValue) {
           return `For increasing targets, Q1 target (${q1Target}) must be greater than or equal to baseline (${baselineValue})`;
         }
@@ -446,7 +410,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
           return `For increasing targets, Q4 target (${q4Target}) must equal annual target (${annualTarget})`;
         }
       } else if (targetType === 'decreasing') {
-        // Q1 must be less than or equal to baseline
+        // Q1 must equal or be less than baseline
         if (baselineValue !== null && q1Target > baselineValue) {
           return `For decreasing targets, Q1 target (${q1Target}) must be less than or equal to baseline (${baselineValue})`;
         }
@@ -471,66 +435,6 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
       return 'Error validating targets. Please check your input values.';
     }
   };
-
-  // Enhanced form validation
-  const getValidationErrors = () => {
-    const errors: string[] = [];
-    
-    try {
-      // Check required fields
-      if (!currentName || !currentName.trim()) {
-        errors.push('Activity name is required');
-      } else if (currentName.trim().length < 3) {
-        errors.push('Activity name must be at least 3 characters');
-      }
-      
-      if (!currentWeight || currentWeight <= 0) {
-        errors.push('Weight must be greater than 0');
-      } else if (currentWeight > 100) {
-        errors.push('Weight cannot exceed 100%');
-      } else if (currentWeight > maxWeight) {
-        errors.push(`Weight cannot exceed ${maxWeight.toFixed(2)}%. Available: ${remainingWeight.toFixed(2)}%`);
-      }
-      
-      if (!baseline || !baseline.trim()) {
-        errors.push('Baseline is required');
-      }
-      
-      if (!annualTarget || annualTarget <= 0) {
-        errors.push('Annual target must be greater than 0');
-      }
-      
-      if (!hasPeriodSelected) {
-        errors.push('Please select at least one period (month or quarter)');
-      }
-      
-      // Target validation
-      const targetError = validateTargets();
-      if (targetError) {
-        errors.push(targetError);
-      }
-      
-      return errors;
-    } catch (error) {
-      console.error('Error in getValidationErrors:', error);
-      return ['Error validating form. Please check your input values.'];
-    }
-  };
-
-  // Check if form is valid
-  const isFormValid = () => {
-    try {
-      const errors = getValidationErrors();
-      return errors.length === 0 && 
-             Math.abs(calculatedYearlyTarget - annualTarget) < 0.01 &&
-             userOrgId !== null &&
-             isFormReady;
-    } catch (error) {
-      console.error('Error in isFormValid:', error);
-      return false;
-    }
-  };
-
   const togglePeriodType = () => {
     try {
       if (periodType === 'months') {
