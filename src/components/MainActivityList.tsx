@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { mainActivities, auth } from '../lib/api';
+import { mainActivities, auth, subActivities } from '../lib/api';
 import { Activity, AlertCircle, CheckCircle, Edit, Trash2, Lock, PlusCircle, DollarSign, Building2, Info, Loader } from 'lucide-react';
 import { useLanguage } from '../lib/i18n/LanguageContext';
 import type { MainActivity } from '../types/organization';
 import { isPlanner } from '../types/user';
+import ActivityBudgetForm from './ActivityBudgetForm';
 
 interface MainActivityListProps {
   initiativeId: string;
@@ -31,6 +32,9 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
   const [userOrgId, setUserOrgId] = useState<number | null>(null);
   const [validationSuccess, setValidationSuccess] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [selectedActivity, setSelectedActivity] = useState<MainActivity | null>(null);
+  const [showSubActivityModal, setShowSubActivityModal] = useState(false);
+  const [selectedSubActivity, setSelectedSubActivity] = useState<any>(null);
 
   // Get user data
   useEffect(() => {
@@ -68,6 +72,28 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
     staleTime: 0,
     cacheTime: 0,
     refetchOnMount: true,
+  });
+
+  // Create sub-activity mutation
+  const createSubActivityMutation = useMutation({
+    mutationFn: (subActivityData: any) => subActivities.create(subActivityData),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['main-activities', initiativeId] });
+      setShowSubActivityModal(false);
+      setSelectedSubActivity(null);
+      refetch();
+    }
+  });
+
+  // Update sub-activity mutation
+  const updateSubActivityMutation = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: any }) => subActivities.update(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['main-activities', initiativeId] });
+      setShowSubActivityModal(false);
+      setSelectedSubActivity(null);
+      refetch();
+    }
   });
 
   // Delete activity mutation
@@ -125,6 +151,38 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
     if (window.confirm('Are you sure you want to delete this activity? This action cannot be undone.')) {
       deleteActivityMutation.mutate(activityId);
     }
+  };
+
+  // Handle sub-activity click
+  const handleSubActivityClick = (activity: MainActivity, subActivity?: any) => {
+    setSelectedActivity(activity);
+    setSelectedSubActivity(subActivity || null);
+    setShowSubActivityModal(true);
+  };
+
+  // Handle sub-activity form submission
+  const handleSubActivitySubmit = async (data: any) => {
+    try {
+      if (selectedSubActivity) {
+        // Update existing sub-activity
+        await updateSubActivityMutation.mutateAsync({
+          id: selectedSubActivity.id,
+          data
+        });
+      } else {
+        // Create new sub-activity
+        await createSubActivityMutation.mutateAsync(data);
+      }
+    } catch (error) {
+      console.error('Error saving sub-activity:', error);
+    }
+  };
+
+  // Handle modal close
+  const handleCloseModal = () => {
+    setShowSubActivityModal(false);
+    setSelectedActivity(null);
+    setSelectedSubActivity(null);
   };
 
   // Handle activity validation
@@ -387,6 +445,74 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
                   </div>
                 </div>
               )}
+
+              {/* Sub-activities */}
+              {subActivities.length > 0 && (
+                <div className="mt-3 border-t border-gray-200 pt-2">
+                  <div className="flex items-center justify-between mb-2">
+                    <h5 className="text-xs font-medium text-gray-600">Sub-activities ({subActivities.length})</h5>
+                    {isUserPlanner && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleSubActivityClick(activity);
+                        }}
+                        className="text-xs text-green-600 hover:text-green-800 flex items-center"
+                      >
+                        <PlusCircle className="h-3 w-3 mr-1" />
+                        Add
+                      </button>
+                    )}
+                  </div>
+                  <div className="space-y-1">
+                    {subActivities.map((subActivity) => (
+                      <div
+                        key={subActivity.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (isUserPlanner) {
+                            handleSubActivityClick(activity, subActivity);
+                          }
+                        }}
+                        className={`text-xs p-2 bg-white border border-gray-200 rounded ${isUserPlanner ? 'cursor-pointer hover:border-blue-300' : ''}`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-medium text-gray-900">{subActivity.name}</span>
+                          <span className="text-xs bg-gray-100 px-2 py-0.5 rounded text-gray-600">
+                            {subActivity.activity_type}
+                          </span>
+                        </div>
+                        {subActivity.budget_calculation_type === 'WITH_TOOL' && subActivity.estimated_cost_with_tool > 0 && (
+                          <div className="text-xs text-green-600 mt-1">
+                            Budget: ${Number(subActivity.estimated_cost_with_tool).toLocaleString()}
+                          </div>
+                        )}
+                        {subActivity.budget_calculation_type === 'WITHOUT_TOOL' && subActivity.estimated_cost_without_tool > 0 && (
+                          <div className="text-xs text-green-600 mt-1">
+                            Budget: ${Number(subActivity.estimated_cost_without_tool).toLocaleString()}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Add sub-activity button for activities without sub-activities */}
+              {subActivities.length === 0 && isUserPlanner && (
+                <div className="mt-3 border-t border-gray-200 pt-2">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleSubActivityClick(activity);
+                    }}
+                    className="text-xs text-green-600 hover:text-green-800 flex items-center"
+                  >
+                    <PlusCircle className="h-3 w-3 mr-1" />
+                    Add Sub-activity
+                  </button>
+                </div>
+              )}
               
               <div className="flex justify-end mt-2">
                 {isUserPlanner ? (
@@ -445,6 +571,29 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
               Cannot add more activities. Reached weight limit of {maxAllowedWeight}%.
             </p>
           )}
+        </div>
+      )}
+
+      {/* Sub-Activity Modal */}
+      {showSubActivityModal && selectedActivity && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] overflow-hidden">
+            <div className="p-6">
+              <h3 className="text-lg font-medium text-gray-900 mb-4">
+                {selectedSubActivity ? 'Edit Sub-Activity' : 'Add Sub-Activity'} - {selectedActivity.name}
+              </h3>
+              
+              <ActivityBudgetForm
+                activity={selectedActivity}
+                budgetCalculationType={selectedSubActivity?.budget_calculation_type || 'WITHOUT_TOOL'}
+                activityType={selectedSubActivity?.activity_type || null}
+                onSubmit={handleSubActivitySubmit}
+                initialData={selectedSubActivity}
+                onCancel={handleCloseModal}
+                isSubmitting={createSubActivityMutation.isPending || updateSubActivityMutation.isPending}
+              />
+            </div>
+          </div>
         </div>
       )}
     </div>
