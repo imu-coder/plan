@@ -6,6 +6,7 @@ import type { MainActivity, TargetType } from '../types/plan';
 import { MONTHS, QUARTERS, Month, Quarter, TARGET_TYPES } from '../types/plan';
 import { auth, api } from '../lib/api';
 import Cookies from 'js-cookie';
+import axios from 'axios';
 
 interface MainActivityFormProps {
   initiativeId: string;
@@ -241,13 +242,14 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
   const validationErrors = getValidationErrors();
   const isFormValid = validationErrors.length === 0 && Math.abs(calculatedYearlyTarget - annualTarget) < 0.01;
 
+  // PRODUCTION-SAFE FORM SUBMISSION
   const handleFormSubmit = async (data: Partial<MainActivity>) => {
-    console.log('MainActivityForm: Starting form submission...');
+    console.log('MainActivityForm: Starting production-safe form submission...');
     setIsSubmitting(true);
     setSubmitError(null);
     
     try {
-      // Validate required data first
+      // 1. Validate required data first
       if (!userOrgId) {
         throw new Error('User organization not found');
       }
@@ -264,94 +266,162 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
         throw new Error('Initiative ID is required');
       }
 
-      // Ensure fresh authentication
+      // 2. Ensure fresh authentication for production
       console.log('MainActivityForm: Ensuring fresh authentication...');
       const freshAuthData = await auth.getCurrentUser();
       if (!freshAuthData.isAuthenticated) {
         throw new Error('Authentication expired. Please login again.');
       }
 
-      // Get fresh CSRF token
+      // 3. Get fresh CSRF token for production
       try {
-        await api.get('/auth/csrf/');
+        await axios.get('/api/auth/csrf/', { withCredentials: true });
         console.log('MainActivityForm: Fresh CSRF token obtained');
       } catch (csrfError) {
         console.warn('MainActivityForm: CSRF token fetch failed:', csrfError);
-        // Continue anyway, the API might still work
       }
 
-      // Prepare clean data for Django - exactly matching the model fields
-      const cleanData = {
-        name: data.name.trim(),
-        initiative: initiativeId, // String ID
-        weight: parseFloat(data.weight.toString()).toFixed(2), // Convert to string with 2 decimals
-        baseline: (data.baseline || '').trim(),
-        target_type: data.target_type || 'cumulative',
-        q1_target: parseFloat((data.q1_target || 0).toString()).toFixed(2),
-        q2_target: parseFloat((data.q2_target || 0).toString()).toFixed(2),
-        q3_target: parseFloat((data.q3_target || 0).toString()).toFixed(2),
-        q4_target: parseFloat((data.q4_target || 0).toString()).toFixed(2),
-        annual_target: parseFloat((data.annual_target || 0).toString()).toFixed(2),
-        organization: userOrgId, // Integer organization ID
-        selected_months: periodType === 'months' ? (data.selected_months || []) : [],
-        selected_quarters: periodType === 'quarters' ? (data.selected_quarters || []) : []
+      // 4. Prepare PRODUCTION-SAFE data - exactly matching Django model fields
+      const productionSafeData = {
+        // Required fields
+        name: String(data.name).trim(),
+        initiative: String(initiativeId), // Convert to string for Django
+        weight: String(Number(data.weight).toFixed(2)), // Format as string with 2 decimals
+        
+        // Target fields - ensure they're numbers in string format for Django DecimalField
+        q1_target: String(Number(data.q1_target || 0).toFixed(2)),
+        q2_target: String(Number(data.q2_target || 0).toFixed(2)),
+        q3_target: String(Number(data.q3_target || 0).toFixed(2)),
+        q4_target: String(Number(data.q4_target || 0).toFixed(2)),
+        annual_target: String(Number(data.annual_target || 0).toFixed(2)),
+        
+        // Optional fields with proper defaults
+        baseline: String(data.baseline || '').trim(),
+        target_type: String(data.target_type || 'cumulative'),
+        
+        // JSON fields - ensure they're proper arrays
+        selected_months: periodType === 'months' ? (Array.isArray(data.selected_months) ? data.selected_months : []) : [],
+        selected_quarters: periodType === 'quarters' ? (Array.isArray(data.selected_quarters) ? data.selected_quarters : []) : [],
+        
+        // Organization assignment - critical for production
+        organization: Number(userOrgId),
+        organization_id: Number(userOrgId) // Add both for compatibility
       };
 
-      console.log('MainActivityForm: Prepared clean data for submission:', cleanData);
+      console.log('MainActivityForm: Prepared production-safe data:', productionSafeData);
 
-      // Validate data before sending
-      if (!cleanData.name || cleanData.name.length < 3) {
-        throw new Error('Activity name must be at least 3 characters long');
+      // 5. PRODUCTION VALIDATION - validate everything before sending
+      if (!productionSafeData.name || productionSafeData.name.length < 2) {
+        throw new Error('Activity name must be at least 2 characters long');
       }
 
-      if (parseFloat(cleanData.weight) <= 0) {
-        throw new Error('Weight must be greater than 0');
+      if (Number(productionSafeData.weight) <= 0 || Number(productionSafeData.weight) > 100) {
+        throw new Error('Weight must be between 0 and 100');
       }
 
-      if (parseFloat(cleanData.annual_target) <= 0) {
+      if (Number(productionSafeData.annual_target) <= 0) {
         throw new Error('Annual target must be greater than 0');
       }
 
       // Validate periods
-      if (cleanData.selected_months.length === 0 && cleanData.selected_quarters.length === 0) {
+      if (productionSafeData.selected_months.length === 0 && productionSafeData.selected_quarters.length === 0) {
         throw new Error('At least one month or quarter must be selected');
       }
 
-      // Call parent onSubmit with clean data
-      console.log('MainActivityForm: Calling parent onSubmit...');
-      await onSubmit(cleanData);
-      console.log('MainActivityForm: Successfully submitted to parent');
+      // Validate organization
+      if (!productionSafeData.organization || productionSafeData.organization <= 0) {
+        throw new Error('Valid organization is required');
+      }
+
+      // 6. PRODUCTION API CALL with multiple fallbacks
+      console.log('MainActivityForm: Making production API call...');
+      
+      let response;
+      let attempts = 0;
+      const maxAttempts = 3;
+      
+      while (attempts < maxAttempts) {
+        try {
+          attempts++;
+          console.log(`MainActivityForm: API attempt ${attempts}/${maxAttempts}`);
+          
+          // Ensure fresh CSRF token for each attempt
+          const csrfResponse = await axios.get('/api/auth/csrf/', { withCredentials: true });
+          const csrfToken = csrfResponse.headers['x-csrftoken'] || Cookies.get('csrftoken');
+          
+          const apiHeaders = {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': csrfToken || '',
+            'Accept': 'application/json',
+          };
+
+          if (initialData?.id) {
+            // UPDATE existing activity
+            console.log('MainActivityForm: Updating existing activity:', initialData.id);
+            response = await axios.put(`/api/main-activities/${initialData.id}/`, productionSafeData, {
+              headers: apiHeaders,
+              withCredentials: true,
+              timeout: 10000
+            });
+          } else {
+            // CREATE new activity
+            console.log('MainActivityForm: Creating new activity');
+            response = await axios.post('/api/main-activities/', productionSafeData, {
+              headers: apiHeaders,
+              withCredentials: true,
+              timeout: 10000
+            });
+          }
+          
+          console.log('MainActivityForm: API call successful:', response.data);
+          break; // Success, exit retry loop
+          
+        } catch (apiError: any) {
+          console.error(`MainActivityForm: API attempt ${attempts} failed:`, apiError);
+          
+          if (attempts === maxAttempts) {
+            // Last attempt failed, throw error
+            let errorMessage = 'Failed to save main activity';
+            
+            if (apiError.response?.status === 400) {
+              // Validation error
+              const errorData = apiError.response.data;
+              if (typeof errorData === 'object') {
+                const firstError = Object.values(errorData)[0];
+                errorMessage = Array.isArray(firstError) ? firstError[0] : String(firstError);
+              } else {
+                errorMessage = String(errorData);
+              }
+            } else if (apiError.response?.status === 403) {
+              errorMessage = 'Permission denied. Check your role and organization access.';
+            } else if (apiError.response?.status === 404) {
+              errorMessage = 'Initiative not found. Please refresh the page.';
+            } else if (apiError.response?.status >= 500) {
+              errorMessage = 'Server error. Please try again later.';
+            } else if (apiError.message) {
+              errorMessage = apiError.message;
+            }
+            
+            throw new Error(errorMessage);
+          }
+          
+          // Wait before retry
+          await new Promise(resolve => setTimeout(resolve, 1000 * attempts));
+        }
+      }
+      
+      // 7. SUCCESS - call parent component
+      console.log('MainActivityForm: Successfully saved, calling parent onSubmit...');
+      
+      // Call parent with the response data or original data
+      const savedData = response?.data || productionSafeData;
+      await onSubmit(savedData);
+      
+      console.log('MainActivityForm: Parent onSubmit completed successfully');
       
     } catch (error: any) {
       console.error('MainActivityForm: Form submission error:', error);
-      
-      let errorMessage = 'Failed to save activity';
-      
-      if (error.response?.data) {
-        if (typeof error.response.data === 'string') {
-          errorMessage = error.response.data;
-        } else if (error.response.data.detail) {
-          errorMessage = error.response.data.detail;
-        } else if (error.response.data.error) {
-          errorMessage = error.response.data.error;
-        } else if (error.response.data.message) {
-          errorMessage = error.response.data.message;
-        } else if (error.response.data.weight) {
-          errorMessage = Array.isArray(error.response.data.weight) 
-            ? error.response.data.weight[0] 
-            : error.response.data.weight;
-        } else if (error.response.data.name) {
-          errorMessage = Array.isArray(error.response.data.name) 
-            ? error.response.data.name[0] 
-            : error.response.data.name;
-        } else {
-          errorMessage = JSON.stringify(error.response.data);
-        }
-      } else if (error.message) {
-        errorMessage = error.message;
-      }
-      
-      setSubmitError(`Error: ${errorMessage}`);
+      setSubmitError(`Error: ${error.message || 'Failed to save activity'}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -445,6 +515,14 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
         </div>
       )}
 
+      {/* Form is valid indicator */}
+      {isFormValid && !submitError && (
+        <div className="p-3 bg-green-50 border border-green-200 rounded-md flex items-center gap-2">
+          <CheckCircle className="h-5 w-5 text-green-500" />
+          <p className="text-sm text-green-700">Form is ready for submission</p>
+        </div>
+      )}
+
       {/* Activity Name */}
       <div className="space-y-2">
         <label className="block text-sm font-medium text-gray-700">
@@ -455,7 +533,8 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
           type="text"
           {...register('name', { 
             required: 'Activity name is required',
-            minLength: { value: 3, message: 'Name must be at least 3 characters' }
+            minLength: { value: 2, message: 'Name must be at least 2 characters' },
+            maxLength: { value: 255, message: 'Name cannot exceed 255 characters' }
           })}
           className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
           placeholder="Enter activity name"
@@ -493,6 +572,9 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
         {errors.weight && (
           <p className="mt-1 text-sm text-red-600">{errors.weight.message}</p>
         )}
+        <p className="mt-1 text-xs text-gray-500">
+          Activities must total {expectedActivitiesWeight}% (65% of initiative weight {initiativeWeight}%)
+        </p>
       </div>
 
       {/* Baseline */}
@@ -503,7 +585,8 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
         <input
           type="text"
           {...register('baseline', { 
-            required: 'Baseline is required'
+            required: 'Baseline is required',
+            maxLength: { value: 255, message: 'Baseline cannot exceed 255 characters' }
           })}
           className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
           placeholder="Enter current value or starting point"
@@ -511,6 +594,9 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
         {errors.baseline && (
           <p className="mt-1 text-sm text-red-600">{errors.baseline.message}</p>
         )}
+        <p className="mt-1 text-xs text-gray-500">
+          The starting point against which progress will be measured
+        </p>
       </div>
 
       {/* Period Selection */}
@@ -520,6 +606,9 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
             <span className="flex items-center gap-2">
               <Calendar className="h-5 w-5 text-gray-400" />
               Period Selection <span className="text-red-500">*</span>
+            </span>
+            <span className="text-xs font-normal text-gray-500 block mt-1">
+              Select when this activity will be implemented
             </span>
           </label>
           <button
@@ -632,6 +721,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
           <label className="block text-sm font-medium text-gray-700 mb-1">
             Target Type
           </label>
+          <p className="text-xs text-gray-500 mb-1">How targets are calculated across quarters</p>
           <select
             {...register('target_type')}
             className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
@@ -642,6 +732,10 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
               </option>
             ))}
           </select>
+          <p className="mt-1 text-xs text-gray-500 flex items-center">
+            <Info className="h-4 w-4 mr-1 text-blue-500" />
+            {TARGET_TYPES.find(t => t.value === targetType)?.description}
+          </p>
         </div>
 
         <h3 className="text-lg font-medium text-gray-900 mb-4">Targets</h3>
@@ -651,6 +745,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Annual Target <span className="text-red-500">*</span>
             </label>
+            <p className="text-xs text-gray-500 mb-1">The target to reach by end of fiscal year</p>
             <input
               type="number"
               step="0.01"
@@ -672,6 +767,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Q1 Target (Jul-Sep) <span className="text-red-500">*</span>
             </label>
+            <p className="text-xs text-gray-500 mb-1">Target for July - September</p>
             <input
               type="number"
               step="0.01"
@@ -693,6 +789,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Q2 Target (Oct-Dec) <span className="text-red-500">*</span>
             </label>
+            <p className="text-xs text-gray-500 mb-1">Target for October - December</p>
             <input
               type="number"
               step="0.01"
@@ -726,6 +823,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Q3 Target (Jan-Mar) <span className="text-red-500">*</span>
             </label>
+            <p className="text-xs text-gray-500 mb-1">Target for January - March</p>
             <input
               type="number"
               step="0.01"
@@ -759,6 +857,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Q4 Target (Apr-Jun) <span className="text-red-500">*</span>
             </label>
+            <p className="text-xs text-gray-500 mb-1">Target for April - June</p>
             <input
               type="number"
               step="0.01"
@@ -803,7 +902,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
       </div>
 
       {/* Form Actions */}
-      <div className="flex justify-end space-x-3 pt-4">
+      <div className="flex justify-end space-x-3 pt-4 border-t border-gray-200">
         <button
           type="button"
           onClick={onCancel}
@@ -818,10 +917,10 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
           className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
         >
           {isSubmitting ? (
-            <>
+            <span className="flex items-center">
               <Loader className="h-4 w-4 mr-2 animate-spin" />
               Saving...
-            </>
+            </span>
           ) : (
             initialData ? 'Update Activity' : 'Create Activity'
           )}

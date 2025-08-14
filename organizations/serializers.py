@@ -198,10 +198,169 @@ class MainActivitySerializer(serializers.ModelSerializer):
     funding_gap = serializers.SerializerMethodField()
     # Keep legacy budget field for backward compatibility
     budget = ActivityBudgetSerializer(read_only=True, source='legacy_budgets.first')
+    organization_id = serializers.IntegerField(write_only=True, required=False)
     
     class Meta:
         model = MainActivity
         fields = '__all__'
+        
+    def validate(self, data):
+        """Enhanced validation for production stability"""
+        try:
+            # Ensure required fields are present
+            if not data.get('name', '').strip():
+                raise serializers.ValidationError({'name': 'Activity name is required and cannot be empty'})
+            
+            if 'weight' not in data or data['weight'] is None:
+                raise serializers.ValidationError({'weight': 'Weight is required'})
+                
+            # Convert and validate weight
+            try:
+                weight = float(data['weight'])
+                if weight <= 0:
+                    raise serializers.ValidationError({'weight': 'Weight must be greater than 0'})
+                if weight > 100:
+                    raise serializers.ValidationError({'weight': 'Weight cannot exceed 100%'})
+            except (ValueError, TypeError):
+                raise serializers.ValidationError({'weight': 'Weight must be a valid number'})
+            
+            # Validate initiative exists
+            initiative_id = data.get('initiative')
+            if not initiative_id:
+                raise serializers.ValidationError({'initiative': 'Initiative is required'})
+                
+            try:
+                if isinstance(initiative_id, str):
+                    initiative = StrategicInitiative.objects.get(id=initiative_id)
+                else:
+                    initiative = initiative_id
+                    
+                data['initiative'] = initiative
+            except StrategicInitiative.DoesNotExist:
+                raise serializers.ValidationError({'initiative': f'Initiative with ID {initiative_id} does not exist'})
+            except Exception as e:
+                raise serializers.ValidationError({'initiative': f'Invalid initiative reference: {str(e)}'})
+            
+            # Validate targets based on target_type
+            target_type = data.get('target_type', 'cumulative')
+            q1_target = float(data.get('q1_target', 0))
+            q2_target = float(data.get('q2_target', 0))
+            q3_target = float(data.get('q3_target', 0))
+            q4_target = float(data.get('q4_target', 0))
+            annual_target = float(data.get('annual_target', 0))
+            
+            if annual_target <= 0:
+                raise serializers.ValidationError({'annual_target': 'Annual target must be greater than 0'})
+            
+            # Target type validation
+            if target_type == 'cumulative':
+                quarterly_sum = q1_target + q2_target + q3_target + q4_target
+                if abs(quarterly_sum - annual_target) > 0.01:
+                    raise serializers.ValidationError({
+                        'annual_target': f'For cumulative targets, sum of quarterly targets ({quarterly_sum}) must equal annual target ({annual_target})'
+                    })
+            elif target_type == 'increasing':
+                if not (q1_target <= q2_target <= q3_target <= q4_target):
+                    raise serializers.ValidationError({
+                        'q1_target': 'For increasing targets, quarterly targets must be in ascending order (Q1 ≤ Q2 ≤ Q3 ≤ Q4)'
+                    })
+                if abs(q4_target - annual_target) > 0.01:
+                    raise serializers.ValidationError({
+                        'q4_target': f'For increasing targets, Q4 target ({q4_target}) must equal annual target ({annual_target})'
+                    })
+            elif target_type == 'decreasing':
+                if not (q1_target >= q2_target >= q3_target >= q4_target):
+                    raise serializers.ValidationError({
+                        'q1_target': 'For decreasing targets, quarterly targets must be in descending order (Q1 ≥ Q2 ≥ Q3 ≥ Q4)'
+                    })
+                if abs(q4_target - annual_target) > 0.01:
+                    raise serializers.ValidationError({
+                        'q4_target': f'For decreasing targets, Q4 target ({q4_target}) must equal annual target ({annual_target})'
+                    })
+            elif target_type == 'constant':
+                if not (abs(q1_target - annual_target) < 0.01 and 
+                       abs(q2_target - annual_target) < 0.01 and 
+                       abs(q3_target - annual_target) < 0.01 and 
+                       abs(q4_target - annual_target) < 0.01):
+                    raise serializers.ValidationError({
+                        'q1_target': f'For constant targets, all quarterly targets must equal annual target ({annual_target})'
+                    })
+            
+            # Validate period selection
+            selected_months = data.get('selected_months', [])
+            selected_quarters = data.get('selected_quarters', [])
+            
+            if not selected_months and not selected_quarters:
+                raise serializers.ValidationError('At least one month or quarter must be selected')
+            
+            # Ensure arrays are properly formatted
+            if selected_months is None:
+                data['selected_months'] = []
+            if selected_quarters is None:
+                data['selected_quarters'] = []
+            
+            # Handle organization assignment
+            organization_id = data.get('organization_id') or data.get('organization')
+            if organization_id:
+                try:
+                    org = Organization.objects.get(id=organization_id)
+                    data['organization'] = org
+                except Organization.DoesNotExist:
+                    raise serializers.ValidationError({'organization': f'Organization with ID {organization_id} does not exist'})
+            
+            # Validate activity weight against total for initiative (total should be 65% of initiative weight)
+            instance_id = self.instance.id if self.instance else None
+            
+            existing_activities = MainActivity.objects.filter(initiative=initiative)
+            if instance_id:
+                existing_activities = existing_activities.exclude(id=instance_id)
+            
+            total_existing_weight = existing_activities.aggregate(
+                total=models.Sum('weight')
+            )['total'] or 0
+            
+            # Calculate expected activities weight (65% of initiative weight)
+            initiative_weight = float(initiative.weight)
+            max_allowed_weight = round(initiative_weight * 0.65, 2)
+            current_weight = float(weight)
+            total_weight_after = float(total_existing_weight) + current_weight
+            
+            if total_weight_after > max_allowed_weight:
+                raise serializers.ValidationError({
+                    'weight': f'Total weight of activities ({total_weight_after:.2f}%) cannot exceed {max_allowed_weight:.2f}% '
+                             f'(65% of initiative weight {initiative_weight:.2f}%)'
+                })
+            
+            return data
+            
+        except serializers.ValidationError:
+            raise
+        except Exception as e:
+            logger.exception(f"Unexpected error in MainActivity validation: {str(e)}")
+            raise serializers.ValidationError(f"Validation failed: {str(e)}")
+    
+    def create(self, validated_data):
+        """Enhanced create method for production stability"""
+        try:
+            # Handle organization_id if present
+            organization_id = validated_data.pop('organization_id', None)
+            if organization_id and not validated_data.get('organization'):
+                try:
+                    org = Organization.objects.get(id=organization_id)
+                    validated_data['organization'] = org
+                except Organization.DoesNotExist:
+                    raise serializers.ValidationError(f"Organization with ID {organization_id} does not exist")
+            
+            # Ensure organization is set (inherit from initiative if not provided)
+            if not validated_data.get('organization') and validated_data.get('initiative'):
+                initiative = validated_data['initiative']
+                if hasattr(initiative, 'organization') and initiative.organization:
+                    validated_data['organization'] = initiative.organization
+            
+            logger.info(f"Creating main activity with data: {validated_data}")
+            return super().create(validated_data)
+            
+        except Exception as e:
     
     def get_total_budget(self, obj):
         # Calculate total budget from sub-activities + legacy budget
