@@ -17,6 +17,7 @@ interface InitiativeListProps {
   planKey?: string; // Add plan key to force refresh
   isUserPlanner: boolean;  // Add this prop
   userOrgId: number | null; // Add this prop
+  refreshKey?: number; // Add external refresh key
 }
 
 const InitiativeList: React.FC<InitiativeListProps> = ({ 
@@ -30,26 +31,30 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
   planKey = 'default',
   isUserPlanner,
   userOrgId,
+  refreshKey = 0,
 }) => {
   const { t } = useLanguage();
   const queryClient = useQueryClient();
   const [validationSuccess, setValidationSuccess] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [lastRefreshKey, setLastRefreshKey] = useState(refreshKey);
   
   console.log('InitiativeList received:', {
     parentWeight,
     parentType,
     parentId,
     selectedObjectiveData: selectedObjectiveData ? 'provided' : 'not provided',
-    customWeight: selectedObjectiveData?.effective_weight || selectedObjectiveData?.planner_weight
+    customWeight: selectedObjectiveData?.effective_weight || selectedObjectiveData?.planner_weight,
+    refreshKey
   });
 
   // Force refresh function for external use
   const forceRefresh = () => {
     console.log('Force refreshing initiatives list');
-    queryClient.invalidateQueries({ queryKey: ['initiatives'] });
+    queryClient.invalidateQueries({ queryKey: ['initiatives', parentId, parentType] });
     setRefreshTrigger(prev => prev + 1);
+    refetch();
   };
 
   // Listen for initiative updates from parent component
@@ -58,16 +63,24 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
     setRefreshTrigger(prev => prev + 1);
   }, [planKey]);
 
+  // Listen for external refresh key changes
+  useEffect(() => {
+    if (refreshKey !== lastRefreshKey) {
+      console.log('InitiativeList: External refresh key changed, refreshing data');
+      setLastRefreshKey(refreshKey);
+      forceRefresh();
+    }
+  }, [refreshKey, lastRefreshKey]);
   // Fetch all initiatives based on parent type
-  const { data: initiativesList, isLoading, refetch } = useQuery({
-    queryKey: ['initiatives', parentId, parentType, planKey, refreshTrigger],
+  const { data: initiativesList, isLoading, refetch, isFetching } = useQuery({
+    queryKey: ['initiatives', parentId, parentType, planKey, refreshTrigger, refreshKey],
     queryFn: async () => {
       if (!parentId) {
         console.log('Missing parentId, cannot fetch initiatives');
         return { data: [] };
       }
       
-      console.log(`Fetching initiatives for ${parentType} ${parentId}`);
+      console.log(`Fetching initiatives for ${parentType} ${parentId} (trigger: ${refreshTrigger}, key: ${refreshKey})`);
       let response;
       switch (parentType) {
         case 'objective':
@@ -83,13 +96,15 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
           throw new Error('Invalid parent type');
       }
 
-      console.log('Fetched initiatives:', response.data);
+      console.log('Fetched initiatives:', response.data?.length || 0, 'items');
       return response;
     },
     enabled: !!parentId, // Only fetch when parentId is available
-    staleTime: 1000, // Cache for 1 second to prevent excessive requests
+    staleTime: 0, // No cache to ensure fresh data
+    cacheTime: 0, // No cache time to force fresh fetch
     refetchOnMount: true,
     refetchOnWindowFocus: false,
+    refetchInterval: false,
   });
 
   // Add delete initiative mutation
@@ -97,8 +112,10 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
     mutationFn: (initiativeId: string) => initiatives.delete(initiativeId),
     onSuccess: () => {
       // Refresh initiatives list and weight summary after deletion
-      queryClient.invalidateQueries({ queryKey: ['initiatives'] });
+      queryClient.invalidateQueries({ queryKey: ['initiatives', parentId, parentType] });
+      queryClient.invalidateQueries({ queryKey: ['objectives'] });
       setRefreshTrigger(prev => prev + 1);
+      refetch();
     }
   });
 
@@ -147,7 +164,7 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
     return (weight / 100) * parentWeight;
   };
 
-  if (isLoading && parentId) {
+  if ((isLoading || isFetching) && parentId) {
     return <div className="text-center p-4">{t('common.loading')}</div>;
   }
 
@@ -155,7 +172,7 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
     return null;
   }
 
-  console.log('Initiatives data:', initiativesList.data);
+  console.log('Initiatives data:', initiativesList.data?.length || 0, 'total initiatives');
 
   // Calculate weight totals from actual initiatives data
   // CRITICAL FIX: Filter initiatives to show both default and user's organization initiatives
@@ -167,7 +184,9 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
     // Include if it's default OR belongs to user's org, but exclude if it belongs to another org
     const shouldInclude = (isDefault || belongsToUserOrg) && !belongsToOtherOrg;
     
-    console.log(`Initiative "${initiative.name}": isDefault=${isDefault}, org=${initiative.organization}, userOrg=${userOrgId}, belongsToUserOrg=${belongsToUserOrg}, belongsToOtherOrg=${belongsToOtherOrg}, shouldInclude=${shouldInclude}`);
+    if (initiative.name) {
+      console.log(`Initiative "${initiative.name}": isDefault=${isDefault}, org=${initiative.organization}, userOrg=${userOrgId}, shouldInclude=${shouldInclude}`);
+    }
     
     return shouldInclude;
   });
@@ -178,15 +197,6 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
     userOrgId,
     parentWeight,
     parentType
-  });
-  
-  // Log each initiative for debugging
-  (initiativesList.data || []).forEach(initiative => {
-    const isDefault = initiative.is_default;
-    const belongsToUserOrg = !initiative.organization || initiative.organization === userOrgId;
-    const isIncluded = isDefault || belongsToUserOrg;
-    
-    console.log(`Initiative "${initiative.name}": weight=${initiative.weight}%, isDefault=${isDefault}, org=${initiative.organization}, belongsToUser=${belongsToUserOrg}, included=${isIncluded}`);
   });
   
   const total_initiatives_weight = filteredInitiatives.reduce((sum, initiative) => 
@@ -213,16 +223,7 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
   const defaultInitiatives = filteredInitiatives.filter(i => i.is_default);
   const customInitiatives = filteredInitiatives.filter(i => !i.is_default);
 
-  console.log('Default initiatives:', defaultInitiatives.length);
-  console.log('Custom initiatives:', customInitiatives.length);
-  console.log('User organization ID:', userOrgId);
-  console.log('Weight calculation:', {
-    parentWeight,
-    total_initiatives_weight,
-    remaining_weight,
-    is_valid,
-    filteredInitiativesCount: filteredInitiatives.length
-  });
+  console.log(`Grouped initiatives: ${defaultInitiatives.length} default, ${customInitiatives.length} custom`);
 
   // If there are no initiatives yet, show empty state
   if (filteredInitiatives.length === 0) {
@@ -284,7 +285,7 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
           </p>
           {isUserPlanner && (
             <button 
-              onClick={() => onEditInitiative({})}
+              onClick={() => onEditInitiative({} as StrategicInitiative)}
               className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700"
             >
               <PlusCircle className="h-4 w-4 mr-2" />
@@ -568,7 +569,7 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
           <button 
             onClick={() => {
               console.log('Creating new initiative with parentWeight:', parentWeight);
-              onEditInitiative({ parentWeight, selectedObjectiveData });
+              onEditInitiative({ parentWeight, selectedObjectiveData } as StrategicInitiative);
             }}
             disabled={parentType === 'objective' && remaining_weight <= 0.01}
             className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
