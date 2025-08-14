@@ -201,16 +201,12 @@ class MainActivitySerializer(serializers.ModelSerializer):
 
     def validate(self, data):
         """RESTORED ORIGINAL VALIDATION LOGIC"""
-        # Ensure organization is set from request user if not provided
+        # Ensure organization is set from request user
         if not data.get('organization'):
             user = self.context['request'].user
             user_org = user.organization_users.first()
             if user_org:
                 data['organization'] = user_org.organization
-            else:
-                raise serializers.ValidationError('No organization found for user')
-            else:
-                raise serializers.ValidationError('No organization found for user')
 
         # Validate period selection
         selected_months = data.get('selected_months', [])
@@ -219,12 +215,8 @@ class MainActivitySerializer(serializers.ModelSerializer):
         if not selected_months and not selected_quarters:
             raise serializers.ValidationError('At least one month or quarter must be selected')
 
-        # RESTORED: Let the model handle weight validation as before
-        # This ensures the original weight validation logic (initiative * 0.65) works
+        # Let Django model handle weight validation in clean() method
         return data
-
-    # RESTORED: Let Django model handle creation/updating
-    # The model's clean() method has the proper weight validation logic
 
 class ActivityBudgetSerializer(serializers.ModelSerializer):
     total_funding = serializers.SerializerMethodField()
