@@ -32,95 +32,54 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
   );
   const [userOrgId, setUserOrgId] = useState<number | null>(null);
   const [isFormReady, setIsFormReady] = useState(false);
-  const [authData, setAuthData] = useState<any>(null);
 
-  // Get user organization ID and auth data
+  // Get user organization ID
   useEffect(() => {
     const fetchUserData = async () => {
       try {
-        console.log('MainActivityForm: Fetching user authentication data...');
         const userData = await auth.getCurrentUser();
-        console.log('MainActivityForm: User data received:', userData);
-        
         if (!userData.isAuthenticated) {
           setSubmitError('User not authenticated. Please login again.');
           return;
         }
         
-        setAuthData(userData);
-        
         if (userData.userOrganizations && userData.userOrganizations.length > 0) {
           const orgId = userData.userOrganizations[0].organization;
           setUserOrgId(orgId);
-          console.log('MainActivityForm: User organization ID set to:', orgId);
           setIsFormReady(true);
         } else {
-          setSubmitError('No organization assigned to user. Please contact administrator.');
+          setSubmitError('No organization assigned to user.');
         }
       } catch (error) {
-        console.error('MainActivityForm: Failed to fetch user data:', error);
-        setSubmitError('Failed to load user data. Please refresh the page.');
+        console.error('Failed to fetch user data:', error);
+        setSubmitError('Failed to load user data.');
       }
     };
     
     fetchUserData();
   }, []);
 
-  // Fetch initiative weight with better error handling
+  // Fetch initiative weight
   useEffect(() => {
     const fetchInitiativeData = async () => {
-      if (!initiativeId || !authData) return;
+      if (!initiativeId) return;
       
       try {
-        console.log('MainActivityForm: Fetching initiative data for ID:', initiativeId);
-        
-        // Ensure we have fresh auth before making API calls
-        await auth.getCurrentUser();
-        
-        // Try multiple ways to get initiative data
-        let initiativeData = null;
-        
-        try {
-          const response = await api.get(`/strategic-initiatives/${initiativeId}/`);
-          initiativeData = response.data;
-        } catch (apiError) {
-          console.warn('MainActivityForm: API call failed, trying direct fetch:', apiError);
-          
-          try {
-            const response = await fetch(`/api/strategic-initiatives/${initiativeId}/`, {
-              credentials: 'include',
-              headers: { 
-                'Content-Type': 'application/json',
-                'X-CSRFToken': Cookies.get('csrftoken') || ''
-              }
-            });
-            
-            if (response.ok) {
-              initiativeData = await response.json();
-            }
-          } catch (fetchError) {
-            console.error('MainActivityForm: Direct fetch also failed:', fetchError);
-          }
-        }
-        
-        if (initiativeData?.weight) {
-          const weight = parseFloat(initiativeData.weight);
+        const response = await api.get(`/strategic-initiatives/${initiativeId}/`);
+        if (response.data?.weight) {
+          const weight = Number(response.data.weight);
           if (!isNaN(weight) && weight > 0) {
             setInitiativeWeight(weight);
-            console.log('MainActivityForm: Initiative weight set to:', weight);
           }
-        } else {
-          console.warn('MainActivityForm: No valid weight found, using fallback');
-          setInitiativeWeight(35); // Reasonable fallback
         }
       } catch (error) {
-        console.error('MainActivityForm: Error fetching initiative:', error);
+        console.error('Error fetching initiative:', error);
         setInitiativeWeight(35); // fallback
       }
     };
     
     fetchInitiativeData();
-  }, [initiativeId, authData]);
+  }, [initiativeId]);
 
   const { register, control, handleSubmit, watch, setValue, formState: { errors } } = useForm<Partial<MainActivity>>({
     defaultValues: {
@@ -161,16 +120,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
   const currentWeight = Number(watch('weight')) || 0;
   const currentName = watch('name') || '';
 
-  // Calculate targets for display
-  const sixMonthTarget = targetType === 'cumulative' ? q1Target + q2Target : q2Target;
-  const nineMonthTarget = targetType === 'cumulative' ? q1Target + q2Target + q3Target : q3Target;
-  const calculatedYearlyTarget = targetType === 'cumulative' 
-    ? q1Target + q2Target + q3Target + q4Target 
-    : targetType === 'constant' 
-      ? (q1Target === q2Target && q2Target === q3Target && q3Target === q4Target && q1Target === annualTarget ? annualTarget : 0)
-      : q4Target;
-
-  // Target validation function
+  // Validate targets based on target type
   const validateTargets = () => {
     const baselineValue = baseline ? parseFloat(baseline) : null;
 
@@ -181,7 +131,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
       }
     } else if (targetType === 'increasing') {
       if (baselineValue !== null && q1Target < baselineValue) {
-        return `For increasing targets, Q1 target (${q1Target}) must be greater than or equal to baseline (${baselineValue})`;
+        return `For increasing targets, Q1 target (${q1Target}) must be >= baseline (${baselineValue})`;
       }
       if (!(q1Target <= q2Target && q2Target <= q3Target && q3Target <= q4Target)) {
         return 'For increasing targets, quarterly targets must be in ascending order (Q1 ≤ Q2 ≤ Q3 ≤ Q4)';
@@ -191,7 +141,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
       }
     } else if (targetType === 'decreasing') {
       if (baselineValue !== null && q1Target > baselineValue) {
-        return `For decreasing targets, Q1 target (${q1Target}) must be less than or equal to baseline (${baselineValue})`;
+        return `For decreasing targets, Q1 target (${q1Target}) must be <= baseline (${baselineValue})`;
       }
       if (!(q1Target >= q2Target && q2Target >= q3Target && q3Target >= q4Target)) {
         return 'For decreasing targets, quarterly targets must be in descending order (Q1 ≥ Q2 ≥ Q3 ≥ Q4)';
@@ -210,6 +160,15 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
     
     return null;
   };
+
+  // Calculate targets for display
+  const sixMonthTarget = targetType === 'cumulative' ? q1Target + q2Target : q2Target;
+  const nineMonthTarget = targetType === 'cumulative' ? q1Target + q2Target + q3Target : q3Target;
+  const calculatedYearlyTarget = targetType === 'cumulative' 
+    ? q1Target + q2Target + q3Target + q4Target 
+    : targetType === 'constant' 
+      ? (q1Target === q2Target && q2Target === q3Target && q3Target === q4Target && q1Target === annualTarget ? annualTarget : 0)
+      : q4Target;
 
   // Form validation
   const getValidationErrors = () => {
@@ -244,12 +203,11 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
 
   // PRODUCTION-SAFE FORM SUBMISSION
   const handleFormSubmit = async (data: Partial<MainActivity>) => {
-    console.log('MainActivityForm: Starting production-safe form submission...');
     setIsSubmitting(true);
     setSubmitError(null);
     
     try {
-      // 1. Validate required data first
+      // Validate required data
       if (!userOrgId) {
         throw new Error('User organization not found');
       }
@@ -266,162 +224,64 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
         throw new Error('Initiative ID is required');
       }
 
-      // 2. Ensure fresh authentication for production
-      console.log('MainActivityForm: Ensuring fresh authentication...');
-      const freshAuthData = await auth.getCurrentUser();
-      if (!freshAuthData.isAuthenticated) {
-        throw new Error('Authentication expired. Please login again.');
-      }
+      // Ensure fresh authentication
+      await auth.getCurrentUser();
 
-      // 3. Get fresh CSRF token for production
-      try {
-        await axios.get('/api/auth/csrf/', { withCredentials: true });
-        console.log('MainActivityForm: Fresh CSRF token obtained');
-      } catch (csrfError) {
-        console.warn('MainActivityForm: CSRF token fetch failed:', csrfError);
-      }
+      // Get fresh CSRF token
+      await axios.get('/api/auth/csrf/', { withCredentials: true });
 
-      // 4. Prepare PRODUCTION-SAFE data - exactly matching Django model fields
-      const productionSafeData = {
-        // Required fields
+      // Prepare clean data for Django
+      const cleanData = {
         name: String(data.name).trim(),
-        initiative: String(initiativeId), // Convert to string for Django
-        weight: String(Number(data.weight).toFixed(2)), // Format as string with 2 decimals
-        
-        // Target fields - ensure they're numbers in string format for Django DecimalField
-        q1_target: String(Number(data.q1_target || 0).toFixed(2)),
-        q2_target: String(Number(data.q2_target || 0).toFixed(2)),
-        q3_target: String(Number(data.q3_target || 0).toFixed(2)),
-        q4_target: String(Number(data.q4_target || 0).toFixed(2)),
-        annual_target: String(Number(data.annual_target || 0).toFixed(2)),
-        
-        // Optional fields with proper defaults
+        initiative: initiativeId,
+        weight: Number(data.weight),
         baseline: String(data.baseline || '').trim(),
         target_type: String(data.target_type || 'cumulative'),
-        
-        // JSON fields - ensure they're proper arrays
+        q1_target: Number(data.q1_target || 0),
+        q2_target: Number(data.q2_target || 0),
+        q3_target: Number(data.q3_target || 0),
+        q4_target: Number(data.q4_target || 0),
+        annual_target: Number(data.annual_target || 0),
         selected_months: periodType === 'months' ? (Array.isArray(data.selected_months) ? data.selected_months : []) : [],
         selected_quarters: periodType === 'quarters' ? (Array.isArray(data.selected_quarters) ? data.selected_quarters : []) : [],
-        
-        // Organization assignment - critical for production
-        organization: Number(userOrgId),
-        organization_id: Number(userOrgId) // Add both for compatibility
+        organization: userOrgId
       };
 
-      console.log('MainActivityForm: Prepared production-safe data:', productionSafeData);
-
-      // 5. PRODUCTION VALIDATION - validate everything before sending
-      if (!productionSafeData.name || productionSafeData.name.length < 2) {
-        throw new Error('Activity name must be at least 2 characters long');
-      }
-
-      if (Number(productionSafeData.weight) <= 0 || Number(productionSafeData.weight) > 100) {
-        throw new Error('Weight must be between 0 and 100');
-      }
-
-      if (Number(productionSafeData.annual_target) <= 0) {
-        throw new Error('Annual target must be greater than 0');
-      }
-
-      // Validate periods
-      if (productionSafeData.selected_months.length === 0 && productionSafeData.selected_quarters.length === 0) {
-        throw new Error('At least one month or quarter must be selected');
-      }
-
-      // Validate organization
-      if (!productionSafeData.organization || productionSafeData.organization <= 0) {
-        throw new Error('Valid organization is required');
-      }
-
-      // 6. PRODUCTION API CALL with multiple fallbacks
-      console.log('MainActivityForm: Making production API call...');
-      
+      // Make API call
       let response;
-      let attempts = 0;
-      const maxAttempts = 3;
-      
-      while (attempts < maxAttempts) {
-        try {
-          attempts++;
-          console.log(`MainActivityForm: API attempt ${attempts}/${maxAttempts}`);
-          
-          // Ensure fresh CSRF token for each attempt
-          const csrfResponse = await axios.get('/api/auth/csrf/', { withCredentials: true });
-          const csrfToken = csrfResponse.headers['x-csrftoken'] || Cookies.get('csrftoken');
-          
-          const apiHeaders = {
-            'Content-Type': 'application/json',
-            'X-CSRFToken': csrfToken || '',
-            'Accept': 'application/json',
-          };
-
-          if (initialData?.id) {
-            // UPDATE existing activity
-            console.log('MainActivityForm: Updating existing activity:', initialData.id);
-            response = await axios.put(`/api/main-activities/${initialData.id}/`, productionSafeData, {
-              headers: apiHeaders,
-              withCredentials: true,
-              timeout: 10000
-            });
-          } else {
-            // CREATE new activity
-            console.log('MainActivityForm: Creating new activity');
-            response = await axios.post('/api/main-activities/', productionSafeData, {
-              headers: apiHeaders,
-              withCredentials: true,
-              timeout: 10000
-            });
-          }
-          
-          console.log('MainActivityForm: API call successful:', response.data);
-          break; // Success, exit retry loop
-          
-        } catch (apiError: any) {
-          console.error(`MainActivityForm: API attempt ${attempts} failed:`, apiError);
-          
-          if (attempts === maxAttempts) {
-            // Last attempt failed, throw error
-            let errorMessage = 'Failed to save main activity';
-            
-            if (apiError.response?.status === 400) {
-              // Validation error
-              const errorData = apiError.response.data;
-              if (typeof errorData === 'object') {
-                const firstError = Object.values(errorData)[0];
-                errorMessage = Array.isArray(firstError) ? firstError[0] : String(firstError);
-              } else {
-                errorMessage = String(errorData);
-              }
-            } else if (apiError.response?.status === 403) {
-              errorMessage = 'Permission denied. Check your role and organization access.';
-            } else if (apiError.response?.status === 404) {
-              errorMessage = 'Initiative not found. Please refresh the page.';
-            } else if (apiError.response?.status >= 500) {
-              errorMessage = 'Server error. Please try again later.';
-            } else if (apiError.message) {
-              errorMessage = apiError.message;
-            }
-            
-            throw new Error(errorMessage);
-          }
-          
-          // Wait before retry
-          await new Promise(resolve => setTimeout(resolve, 1000 * attempts));
-        }
+      if (initialData?.id) {
+        response = await api.put(`/main-activities/${initialData.id}/`, cleanData);
+      } else {
+        response = await api.post('/main-activities/', cleanData);
       }
       
-      // 7. SUCCESS - call parent component
-      console.log('MainActivityForm: Successfully saved, calling parent onSubmit...');
-      
-      // Call parent with the response data or original data
-      const savedData = response?.data || productionSafeData;
-      await onSubmit(savedData);
-      
-      console.log('MainActivityForm: Parent onSubmit completed successfully');
+      // Call parent with the response data
+      await onSubmit(response.data);
       
     } catch (error: any) {
-      console.error('MainActivityForm: Form submission error:', error);
-      setSubmitError(`Error: ${error.message || 'Failed to save activity'}`);
+      console.error('Form submission error:', error);
+      let errorMessage = 'Failed to save activity';
+      
+      if (error.response?.data) {
+        if (typeof error.response.data === 'string') {
+          errorMessage = error.response.data;
+        } else if (error.response.data.detail) {
+          errorMessage = error.response.data.detail;
+        } else if (error.response.data.non_field_errors) {
+          errorMessage = Array.isArray(error.response.data.non_field_errors) 
+            ? error.response.data.non_field_errors[0] 
+            : error.response.data.non_field_errors;
+        } else {
+          // Get first field error
+          const firstField = Object.keys(error.response.data)[0];
+          const firstError = error.response.data[firstField];
+          errorMessage = Array.isArray(firstError) ? firstError[0] : firstError;
+        }
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
+      setSubmitError(errorMessage);
     } finally {
       setIsSubmitting(false);
     }
