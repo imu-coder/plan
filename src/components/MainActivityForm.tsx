@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useForm, Controller } from 'react-hook-form';
+import { useQueryClient } from '@tanstack/react-query';
 import { useLanguage } from '../lib/i18n/LanguageContext';
 import { Loader, Calendar, AlertCircle, Info, CheckCircle } from 'lucide-react';
 import type { MainActivity, TargetType } from '../types/plan';
@@ -22,6 +23,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
   onCancel
 }) => {
   const { t } = useLanguage();
+  const queryClient = useQueryClient();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [initiativeWeight, setInitiativeWeight] = useState(0);
@@ -189,6 +191,11 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
       }
       
       console.log('Activity saved successfully:', result);
+      
+      // CRITICAL: Immediately refresh the activities list
+      queryClient.invalidateQueries({ queryKey: ['main-activities', initiativeId] });
+      queryClient.refetchQueries({ queryKey: ['main-activities', initiativeId] });
+      
       await onSubmit(result.data || result);
       
     } catch (error: any) {

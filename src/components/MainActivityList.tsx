@@ -44,6 +44,8 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
 }) => {
   const { t } = useLanguage();
   const queryClient = useQueryClient();
+  const [lastActivityCount, setLastActivityCount] = useState(0);
+  const [manualRefreshTrigger, setManualRefreshTrigger] = useState(0);
   const [validationSuccess, setValidationSuccess] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [selectedActivity, setSelectedActivity] = useState<any>(null);
@@ -65,8 +67,8 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
   });
 
   // Fetch all main activities for the given initiative
-  const { data: activitiesList, isLoading, refetch } = useQuery({
-    queryKey: ['main-activities', initiativeId, planKey, refreshKey],
+  const { data: activitiesList, isLoading, refetch, isFetching } = useQuery({
+    queryKey: ['main-activities', initiativeId, planKey, refreshKey, manualRefreshTrigger],
     queryFn: async () => {
       if (!initiativeId) {
         console.log('Missing initiativeId, cannot fetch main activities');
@@ -79,8 +81,18 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
       return response;
     },
     enabled: !!initiativeId,
-    staleTime: 0,
-    cacheTime: 0,
+    staleTime: 0, // Always fetch fresh data
+    refetchOnMount: true,
+    refetchOnWindowFocus: false,
+    refetchInterval: false,
+    // Force immediate update when data changes
+    onSuccess: (data) => {
+      const newCount = data?.data?.length || 0;
+      if (newCount !== lastActivityCount) {
+        console.log(`MainActivityList: Activity count changed from ${lastActivityCount} to ${newCount}`);
+        setLastActivityCount(newCount);
+      }
+    }
   });
 
   // Delete activity mutation
@@ -102,7 +114,9 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
 
   // Force refresh function
   const forceRefresh = () => {
-    setRefreshKey(prev => prev + 1);
+    console.log('MainActivityList: Force refresh triggered');
+    setManualRefreshTrigger(prev => prev + 1);
+    queryClient.invalidateQueries({ queryKey: ['main-activities', initiativeId] });
     refetch();
   };
 
@@ -207,6 +221,20 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
       console.log('Selected activity updated in modal:', selectedActivity.name, 'Sub-activities:', selectedActivity.sub_activities?.length || 0);
     }
   }, [selectedActivity?.sub_activities?.length]);
+
+  // Listen for query cache changes to refresh immediately
+  useEffect(() => {
+    const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
+      if (event.type === 'updated' && 
+          event.query.queryKey[0] === 'main-activities' && 
+          event.query.queryKey[1] === initiativeId) {
+        console.log('MainActivityList: Cache updated, triggering refresh');
+        setManualRefreshTrigger(prev => prev + 1);
+      }
+    });
+    
+    return unsubscribe;
+  }, [queryClient, initiativeId]);
 
   const handleSelectActivity = (activity: any) => {
     console.log('Selected activity:', activity);
