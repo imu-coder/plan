@@ -24,88 +24,15 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
   const { t } = useLanguage();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [initiativeWeight, setInitiativeWeight] = useState(100);
+  const [initiativeWeight, setInitiativeWeight] = useState(0);
   const [existingActivitiesWeight, setExistingActivitiesWeight] = useState(0);
   const [periodType, setPeriodType] = useState<'months' | 'quarters'>(
     initialData?.selected_quarters?.length ? 'quarters' : 'months'
   );
   const [userOrgId, setUserOrgId] = useState<number | null>(null);
-  const [isFormReady, setIsFormReady] = useState(false);
+  const [isLoadingWeights, setIsLoadingWeights] = useState(true);
 
-  // Get user organization ID and fetch existing activities weight
-  useEffect(() => {
-    const fetchDataAndCalculateWeights = async () => {
-      try {
-        // Get user data
-        const userData = await auth.getCurrentUser();
-        if (!userData.isAuthenticated) {
-          setSubmitError('User not authenticated. Please login again.');
-          return;
-        }
-        
-        if (!userData.userOrganizations || userData.userOrganizations.length === 0) {
-          setSubmitError('No organization assigned to user.');
-          return;
-        }
-        
-        const orgId = userData.userOrganizations[0].organization;
-        setUserOrgId(orgId);
-
-        // Get initiative data
-        const initiativeResponse = await api.get(`/strategic-initiatives/${initiativeId}/`);
-        const initiative = initiativeResponse.data;
-        
-        if (!initiative?.weight) {
-          setSubmitError('Failed to load initiative weight.');
-          return;
-        }
-        
-        const initWeight = Number(initiative.weight);
-        setInitiativeWeight(initWeight);
-
-        // Get existing activities for this initiative (EXACT same logic as backend)
-        const activitiesResponse = await api.get(`/main-activities/?initiative=${initiativeId}`);
-        const allActivities = activitiesResponse.data?.results || activitiesResponse.data || [];
-        
-        // Filter activities that belong to user's organization (same as backend)
-        const userOrgActivities = allActivities.filter(activity => 
-          !activity.organization || activity.organization === orgId
-        );
-        
-        // Calculate total weight excluding current activity if editing (EXACT same logic as backend)
-        let totalExistingWeight = 0;
-        userOrgActivities.forEach(activity => {
-          // Exclude current activity if editing (same as backend .exclude(id=self.id))
-          if (!initialData || activity.id !== initialData.id) {
-            totalExistingWeight += Number(activity.weight || 0);
-          }
-        });
-        
-        setExistingActivitiesWeight(totalExistingWeight);
-        
-        console.log('Weight calculation (matching backend):', {
-          initiativeId,
-          initiativeWeight: initWeight,
-          maxAllowed: initWeight * 0.65,
-          existingWeight: totalExistingWeight,
-          availableWeight: (initWeight * 0.65) - totalExistingWeight,
-          userOrgId: orgId,
-          totalActivities: allActivities.length,
-          userOrgActivities: userOrgActivities.length,
-          isEditing: !!initialData,
-          editingActivityId: initialData?.id
-        });
-        
-        setIsFormReady(true);
-      } catch (error) {
-        console.error('Failed to fetch data:', error);
-        setSubmitError('Failed to load required data.');
-      }
-    };
-    
-    fetchDataAndCalculateWeights();
-  }, [initiativeId, initialData]);
-
+  // Form setup
   const { register, control, handleSubmit, watch, setValue, formState: { errors } } = useForm<Partial<MainActivity>>({
     defaultValues: {
       initiative: initiativeId,
@@ -123,12 +50,80 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
     }
   });
 
-  // Calculate weight constraints (EXACT same logic as backend)
-  const maxAllowedTotal = Number((initiativeWeight * 0.65).toFixed(2));
-  const availableWeight = Number((maxAllowedTotal - existingActivitiesWeight).toFixed(2));
+  // CRITICAL: Load weight data exactly as backend calculates it
+  useEffect(() => {
+    const loadWeightData = async () => {
+      try {
+        setIsLoadingWeights(true);
+        setSubmitError(null);
+        
+        // Get user organization
+        const userData = await auth.getCurrentUser();
+        if (!userData.isAuthenticated) {
+          setSubmitError('Authentication required');
+          return;
+        }
+        
+        const orgId = userData.userOrganizations?.[0]?.organization;
+        if (!orgId) {
+          setSubmitError('No organization assigned');
+          return;
+        }
+        setUserOrgId(orgId);
+
+        // Get initiative weight
+        const initiativeResponse = await api.get(`/strategic-initiatives/${initiativeId}/`);
+        const initiative = initiativeResponse.data;
+        if (!initiative?.weight) {
+          setSubmitError('Initiative weight not found');
+          return;
+        }
+        
+        const initWeight = parseFloat(initiative.weight);
+        setInitiativeWeight(initWeight);
+
+        // Get existing activities for weight calculation
+        const activitiesResponse = await api.get(`/main-activities/?initiative=${initiativeId}`);
+        const activities = activitiesResponse.data?.results || activitiesResponse.data || [];
+        
+        // Filter by user organization and exclude current activity if editing
+        const relevantActivities = activities.filter(activity => {
+          const belongsToUserOrg = !activity.organization || activity.organization === orgId;
+          const isNotCurrentActivity = !initialData || activity.id !== initialData.id;
+          return belongsToUserOrg && isNotCurrentActivity;
+        });
+        
+        const totalExistingWeight = relevantActivities.reduce((sum, activity) => 
+          sum + parseFloat(activity.weight || 0), 0
+        );
+        
+        setExistingActivitiesWeight(totalExistingWeight);
+        
+        console.log('Weight calculation loaded:', {
+          initiativeWeight: initWeight,
+          maxAllowed: initWeight * 0.65,
+          existingWeight: totalExistingWeight,
+          availableWeight: (initWeight * 0.65) - totalExistingWeight,
+          isEditing: !!initialData
+        });
+        
+      } catch (error) {
+        console.error('Failed to load weight data:', error);
+        setSubmitError('Failed to load weight calculation data');
+      } finally {
+        setIsLoadingWeights(false);
+      }
+    };
+    
+    loadWeightData();
+  }, [initiativeId, initialData]);
+
+  // Weight calculations
+  const maxAllowedTotal = parseFloat((initiativeWeight * 0.65).toFixed(2));
+  const availableWeight = parseFloat((maxAllowedTotal - existingActivitiesWeight).toFixed(2));
   const maxWeight = Math.max(0, availableWeight);
 
-  // Watch form fields
+  // Watch form values
   const selectedMonths = watch('selected_months') || [];
   const selectedQuarters = watch('selected_quarters') || [];
   const hasPeriodSelected = selectedMonths.length > 0 || selectedQuarters.length > 0;
@@ -141,50 +136,8 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
   const q4Target = Number(watch('q4_target')) || 0;
   const annualTarget = Number(watch('annual_target')) || 0;
   const currentWeight = Number(watch('weight')) || 0;
-  const currentName = watch('name') || '';
 
-  // Validate targets based on target type
-  const validateTargets = () => {
-    const baselineValue = baseline ? parseFloat(baseline) : null;
-
-    if (targetType === 'cumulative') {
-      const quarterly_sum = q1Target + q2Target + q3Target + q4Target;
-      if (Math.abs(quarterly_sum - annualTarget) > 0.01) {
-        return `For cumulative targets, sum of quarterly targets (${quarterly_sum}) must equal annual target (${annualTarget})`;
-      }
-    } else if (targetType === 'increasing') {
-      if (baselineValue !== null && q1Target < baselineValue) {
-        return `For increasing targets, Q1 target (${q1Target}) must be >= baseline (${baselineValue})`;
-      }
-      if (!(q1Target <= q2Target && q2Target <= q3Target && q3Target <= q4Target)) {
-        return 'For increasing targets, quarterly targets must be in ascending order (Q1 ≤ Q2 ≤ Q3 ≤ Q4)';
-      }
-      if (Math.abs(q4Target - annualTarget) > 0.01) {
-        return `For increasing targets, Q4 target (${q4Target}) must equal annual target (${annualTarget})`;
-      }
-    } else if (targetType === 'decreasing') {
-      if (baselineValue !== null && q1Target > baselineValue) {
-        return `For decreasing targets, Q1 target (${q1Target}) must be <= baseline (${baselineValue})`;
-      }
-      if (!(q1Target >= q2Target && q2Target >= q3Target && q3Target >= q4Target)) {
-        return 'For decreasing targets, quarterly targets must be in descending order (Q1 ≥ Q2 ≥ Q3 ≥ Q4)';
-      }
-      if (Math.abs(q4Target - annualTarget) > 0.01) {
-        return `For decreasing targets, Q4 target (${q4Target}) must equal annual target (${annualTarget})`;
-      }
-    } else if (targetType === 'constant') {
-      if (!(Math.abs(q1Target - annualTarget) < 0.01 && 
-            Math.abs(q2Target - annualTarget) < 0.01 && 
-            Math.abs(q3Target - annualTarget) < 0.01 && 
-            Math.abs(q4Target - annualTarget) < 0.01)) {
-        return `For constant targets, all quarterly targets must equal annual target (Q1=Q2=Q3=Q4=${annualTarget})`;
-      }
-    }
-    
-    return null;
-  };
-
-  // Calculate targets for display
+  // Calculate display targets
   const sixMonthTarget = targetType === 'cumulative' ? q1Target + q2Target : q2Target;
   const nineMonthTarget = targetType === 'cumulative' ? q1Target + q2Target + q3Target : q3Target;
   const calculatedYearlyTarget = targetType === 'cumulative' 
@@ -193,77 +146,40 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
       ? (q1Target === q2Target && q2Target === q3Target && q3Target === q4Target && q1Target === annualTarget ? annualTarget : 0)
       : q4Target;
 
-  // Form validation
-  const getValidationErrors = () => {
-    const errors: string[] = [];
-    
-    if (!currentName.trim()) {
-      errors.push('Activity name is required');
-    }
-    
-    if (!currentWeight || currentWeight <= 0) {
-      errors.push('Weight must be greater than 0');
-    }
-    
-    if (currentWeight > maxWeight) {
-      errors.push(`Weight cannot exceed ${maxWeight.toFixed(2)}% (Available: ${availableWeight.toFixed(2)}%)`);
-    }
-    
-    if (!hasPeriodSelected) {
-      errors.push('Please select at least one period');
-    }
-    
-    const targetError = validateTargets();
-    if (targetError) {
-      errors.push(targetError);
-    }
-    
-    return errors;
-  };
-  
-  const validationErrors = getValidationErrors();
-  const isFormValid = validationErrors.length === 0 && Math.abs(calculatedYearlyTarget - annualTarget) < 0.01;
-
-  // Form submission with proper error handling
+  // Form submission
   const handleFormSubmit = async (data: Partial<MainActivity>) => {
+    if (isLoadingWeights) {
+      setSubmitError('Please wait for weight data to load');
+      return;
+    }
+
+    if (currentWeight > maxWeight) {
+      setSubmitError(`Weight ${currentWeight}% exceeds available weight ${maxWeight}%`);
+      return;
+    }
+
     setIsSubmitting(true);
     setSubmitError(null);
     
     try {
-      // Final weight check before submission
-      if (!currentWeight || currentWeight <= 0) {
-        throw new Error('Weight must be greater than 0');
-      }
-
-      if (currentWeight > maxWeight) {
-        throw new Error(`Weight ${currentWeight}% exceeds available weight ${maxWeight.toFixed(2)}%. Initiative ${initiativeWeight}% allows max ${maxAllowedTotal}%, existing activities use ${existingActivitiesWeight}%`);
-      }
-
-      // Prepare data EXACTLY as the model expects
+      // Clean data for submission
       const activityData = {
         name: String(data.name || '').trim(),
         initiative: initiativeId,
-        weight: Number(data.weight || 0),
+        weight: parseFloat(String(data.weight || 0)),
         baseline: String(data.baseline || '').trim(),
         target_type: String(data.target_type || 'cumulative'),
-        q1_target: Number(data.q1_target || 0),
-        q2_target: Number(data.q2_target || 0),
-        q3_target: Number(data.q3_target || 0),
-        q4_target: Number(data.q4_target || 0),
-        annual_target: Number(data.annual_target || 0),
+        q1_target: parseFloat(String(data.q1_target || 0)),
+        q2_target: parseFloat(String(data.q2_target || 0)),
+        q3_target: parseFloat(String(data.q3_target || 0)),
+        q4_target: parseFloat(String(data.q4_target || 0)),
+        annual_target: parseFloat(String(data.annual_target || 0)),
         selected_months: periodType === 'months' ? (data.selected_months || []) : [],
         selected_quarters: periodType === 'quarters' ? (data.selected_quarters || []) : [],
         organization: userOrgId
       };
 
-      console.log('Submitting activity data:', activityData);
-      console.log('Weight validation check:', {
-        activityWeight: activityData.weight,
-        existingWeight: existingActivitiesWeight,
-        totalAfter: existingActivitiesWeight + activityData.weight,
-        maxAllowed: maxAllowedTotal,
-        willExceed: (existingActivitiesWeight + activityData.weight) > maxAllowedTotal
-      });
+      console.log('Submitting activity:', activityData);
 
       let result;
       if (initialData?.id) {
@@ -272,6 +188,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
         result = await mainActivities.create(activityData);
       }
       
+      console.log('Activity saved successfully:', result);
       await onSubmit(result.data || result);
       
     } catch (error: any) {
@@ -281,19 +198,18 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
       
       if (error.response?.data) {
         if (Array.isArray(error.response.data)) {
-          errorMessage = error.response.data[0];
+          errorMessage = error.response.data.join(', ');
         } else if (typeof error.response.data === 'string') {
           errorMessage = error.response.data;
         } else if (error.response.data.detail) {
           errorMessage = error.response.data.detail;
         } else if (error.response.data.non_field_errors) {
           const errors = error.response.data.non_field_errors;
-          errorMessage = Array.isArray(errors) ? errors[0] : errors;
+          errorMessage = Array.isArray(errors) ? errors.join(', ') : String(errors);
         } else {
-          // Get first field error
           const firstField = Object.keys(error.response.data)[0];
           const firstError = error.response.data[firstField];
-          errorMessage = Array.isArray(firstError) ? firstError[0] : firstError;
+          errorMessage = Array.isArray(firstError) ? firstError.join(', ') : String(firstError);
         }
       } else if (error.message) {
         errorMessage = error.message;
@@ -313,69 +229,81 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
       setValue('selected_quarters', []);
       setPeriodType('months');
     }
-    setSubmitError(null);
   };
 
-  if (!isFormReady) {
+  if (isLoadingWeights) {
     return (
       <div className="flex items-center justify-center p-8">
         <Loader className="h-6 w-6 animate-spin mr-2" />
-        <span>Loading form...</span>
+        <span>Loading weight calculation...</span>
       </div>
     );
   }
 
   return (
     <form onSubmit={handleSubmit(handleFormSubmit)} className="space-y-6">
-      {/* Weight Information - EXACT backend calculation */}
+      {/* Weight Information */}
       <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
-        <h4 className="text-sm font-medium text-blue-700 mb-2 flex items-center">
-          <Info className="h-4 w-4 mr-1 text-blue-500" />
-          Weight Distribution (Backend Validation)
+        <h4 className="text-sm font-medium text-blue-700 mb-3 flex items-center">
+          <Info className="h-4 w-4 mr-2" />
+          Weight Distribution (65% Rule)
         </h4>
         
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs text-blue-600">
-          <div>
-            <div className="font-medium">Initiative Weight:</div>
-            <div>{initiativeWeight}%</div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+          <div className="text-center">
+            <div className="text-blue-600 font-medium">Initiative Weight</div>
+            <div className="text-lg font-bold text-gray-900">{initiativeWeight}%</div>
           </div>
-          <div>
-            <div className="font-medium">Max Allowed (65%):</div>
-            <div>{maxAllowedTotal}%</div>
+          <div className="text-center">
+            <div className="text-blue-600 font-medium">Max Allowed (65%)</div>
+            <div className="text-lg font-bold text-blue-600">{maxAllowedTotal}%</div>
           </div>
-          <div>
-            <div className="font-medium">Existing Activities:</div>
-            <div>{existingActivitiesWeight.toFixed(2)}%</div>
+          <div className="text-center">
+            <div className="text-blue-600 font-medium">Other Activities</div>
+            <div className="text-lg font-bold text-gray-700">{existingActivitiesWeight.toFixed(2)}%</div>
           </div>
-          <div>
-            <div className="font-medium">Available:</div>
-            <div className={availableWeight > 0 ? 'text-green-600' : 'text-red-600'}>
+          <div className="text-center">
+            <div className="text-blue-600 font-medium">Available</div>
+            <div className={`text-lg font-bold ${availableWeight > 0 ? 'text-green-600' : 'text-red-600'}`}>
               {availableWeight.toFixed(2)}%
             </div>
           </div>
         </div>
         
         {availableWeight <= 0 && (
-          <div className="mt-2 p-2 bg-red-100 border border-red-300 rounded text-red-700 text-xs">
-            <AlertCircle className="h-4 w-4 inline mr-1" />
-            No weight available! Existing activities already use {existingActivitiesWeight}% of allowed {maxAllowedTotal}%
+          <div className="mt-3 p-3 bg-red-100 border border-red-300 rounded">
+            <AlertCircle className="h-4 w-4 inline mr-2 text-red-600" />
+            <span className="text-red-700 text-sm">
+              No weight available! Activities already use {existingActivitiesWeight.toFixed(2)}% of allowed {maxAllowedTotal}%
+            </span>
+          </div>
+        )}
+        
+        {availableWeight > 0 && (
+          <div className="mt-3 p-3 bg-green-100 border border-green-300 rounded">
+            <CheckCircle className="h-4 w-4 inline mr-2 text-green-600" />
+            <span className="text-green-700 text-sm">
+              You can use up to {availableWeight.toFixed(2)}% for this activity
+            </span>
           </div>
         )}
       </div>
 
-      {/* Submit Errors */}
+      {/* Error Display */}
       {submitError && (
-        <div className="p-3 bg-red-50 border border-red-200 rounded-md flex items-start gap-2">
-          <AlertCircle className="h-5 w-5 text-red-500 mt-0.5 flex-shrink-0" />
-          <div>
-            <p className="text-sm font-medium text-red-800">Error saving activity:</p>
-            <p className="text-sm text-red-600 mt-1">{submitError}</p>
+        <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
+          <div className="flex items-start">
+            <AlertCircle className="h-5 w-5 text-red-500 mt-0.5 mr-2 flex-shrink-0" />
+            <div>
+              <p className="text-sm font-medium text-red-800">Error saving activity:</p>
+              <p className="text-sm text-red-600 mt-1 whitespace-pre-wrap">{submitError}</p>
+            </div>
           </div>
         </div>
       )}
 
       {/* Activity Name */}
-      <div className="space-y-2">
+      <div>
         <label className="block text-sm font-medium text-gray-700">
           Activity Name <span className="text-red-500">*</span>
         </label>
@@ -396,8 +324,8 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
       {/* Weight */}
       <div>
         <label className="block text-sm font-medium text-gray-700 mb-1">
-          Weight (%) <span className="text-red-500">*</span> 
-          <span className="text-blue-600">(Maximum: {maxWeight.toFixed(2)}%)</span>
+          Weight (%) <span className="text-red-500">*</span>
+          <span className="text-blue-600 ml-2">(Available: {maxWeight.toFixed(2)}%)</span>
         </label>
         <div className="mt-1 relative rounded-md shadow-sm">
           <input
@@ -413,6 +341,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
             })}
             className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
             placeholder="Enter weight value"
+            disabled={availableWeight <= 0}
           />
           <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
             <span className="text-gray-500 sm:text-sm">%</span>
@@ -422,8 +351,13 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
           <p className="mt-1 text-sm text-red-600">{errors.weight.message}</p>
         )}
         <p className="mt-1 text-xs text-gray-500">
-          Activities total must not exceed {maxAllowedTotal}% (65% of initiative {initiativeWeight}%)
+          Rule: Total activities ≤ 65% of initiative weight ({initiativeWeight}%)
         </p>
+        {currentWeight > 0 && (
+          <p className="mt-1 text-xs text-blue-600">
+            After adding: {(existingActivitiesWeight + currentWeight).toFixed(2)}% / {maxAllowedTotal}%
+          </p>
+        )}
       </div>
 
       {/* Baseline */}
@@ -443,7 +377,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
       </div>
 
       {/* Period Selection */}
-      <div className="space-y-4 border-t border-gray-200 pt-4">
+      <div className="space-y-4">
         <div className="flex justify-between items-center">
           <label className="block text-sm font-medium text-gray-700">
             <span className="flex items-center gap-2">
@@ -722,7 +656,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
         </button>
         <button
           type="submit"
-          disabled={isSubmitting || availableWeight <= 0 || currentWeight > maxWeight}
+          disabled={isSubmitting || availableWeight <= 0 || currentWeight > maxWeight || !hasPeriodSelected}
           className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
         >
           {isSubmitting ? (

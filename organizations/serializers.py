@@ -200,23 +200,39 @@ class MainActivitySerializer(serializers.ModelSerializer):
 
 
     def validate(self, data):
-        """RESTORED ORIGINAL VALIDATION LOGIC"""
-        # Ensure organization is set from request user
+        """Ensure organization is set, then let model handle weight validation"""
+        # Set organization from authenticated user
         if not data.get('organization'):
             user = self.context['request'].user
             user_org = user.organization_users.first()
             if user_org:
                 data['organization'] = user_org.organization
-
+        
         # Validate period selection
         selected_months = data.get('selected_months', [])
         selected_quarters = data.get('selected_quarters', [])
         
         if not selected_months and not selected_quarters:
             raise serializers.ValidationError('At least one month or quarter must be selected')
-
-        # Let Django model handle weight validation in clean() method
+        
+        # Let Django model clean() method handle all weight validation
         return data
+    
+    def create(self, validated_data):
+        """Create with proper error handling"""
+        try:
+            return super().create(validated_data)
+        except DjangoValidationError as e:
+            # Convert Django validation errors to DRF format
+            raise serializers.ValidationError(e.messages)
+    
+    def update(self, instance, validated_data):
+        """Update with proper error handling"""
+        try:
+            return super().update(instance, validated_data)
+        except DjangoValidationError as e:
+            # Convert Django validation errors to DRF format
+            raise serializers.ValidationError(e.messages)
 
 class ActivityBudgetSerializer(serializers.ModelSerializer):
     total_funding = serializers.SerializerMethodField()

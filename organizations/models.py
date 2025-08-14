@@ -548,28 +548,33 @@ class MainActivity(models.Model):
                 raise ValidationError('For constant targets, all quarterly targets must equal annual target')
         
         
-        # Validate activity weight against total for initiative (total should be 65% of initiative weight)
-        total_weight = MainActivity.objects.filter(
-            initiative=self.initiative
-        ).exclude(id=self.id).aggregate(
-            total=models.Sum('weight')
-        )['total'] or Decimal('0')
+        # FIXED: Validate activity weight against total for initiative (65% of initiative weight)
+        if self.initiative_id:
+            # Get other activities (exclude self if editing)
+            other_activities = MainActivity.objects.filter(
+                initiative=self.initiative_id
+            )
+            if self.pk:  # If editing, exclude current activity
+                other_activities = other_activities.exclude(pk=self.pk)
+            
+            other_activities_weight = other_activities.aggregate(
+                total=models.Sum('weight')
+            )['total'] or Decimal('0')
+            
+            # Calculate weight limits
+            initiative_weight = float(self.initiative.weight) if self.initiative else 100.0
+            max_allowed_weight = round(initiative_weight * 0.65, 2)
+            current_weight = float(self.weight)
+            total_weight_after = float(other_activities_weight) + current_weight
+            
+            if total_weight_after > max_allowed_weight:
+                raise ValidationError([
+                    f'Total weight of activities ({total_weight_after:.2f}%) cannot exceed {max_allowed_weight}% '
+                    f'(65% of initiative weight {initiative_weight}%). '
+                    f'Current other activities: {float(other_activities_weight):.2f}%, '
+                    f'Your activity: {current_weight:.2f}%'
+                ])
         
-        # Get the expected weight (65% of initiative weight)
-        # initiative_weight = float(self.initiative.weight)
-        # max_allowed_weight = round(initiative_weight * 0.65, 2)
-        
-        # Calculate expected activities weight (65% of initiative weight)
-        initiative_weight = float(self.initiative.weight)
-        max_allowed_weight = round(initiative_weight * 0.65, 2)
-        current_weight = float(self.weight)
-        other_activities_weight = float(total_weight)
-        total_weight_after = other_activities_weight + current_weight
-        if total_weight_after > max_allowed_weight:
-             raise ValidationError(
-                 f'Total weight of activities ({total_weight_after}) cannot exceed {max_allowed_weight} '
-                  f'(65% of initiative weight {initiative_weight})'
-             )
         # For custom activities, inherit the organization from the initiative if not set
         if not self.organization and self.initiative and self.initiative.organization:
             self.organization = self.initiative.organization
