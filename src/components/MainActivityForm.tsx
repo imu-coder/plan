@@ -4,7 +4,9 @@ import { useLanguage } from '../lib/i18n/LanguageContext';
 import { Loader, Calendar, AlertCircle, Info, CheckCircle } from 'lucide-react';
 import type { MainActivity, TargetType } from '../types/plan';
 import { MONTHS, QUARTERS, Month, Quarter, TARGET_TYPES } from '../types/plan';
-import { mainActivities, auth } from '../lib/api';
+import { mainActivities, auth, api } from '../lib/api';
+import axios from 'axios';
+import Cookies from 'js-cookie';
 
 interface MainActivityFormProps {
   initiativeId: string;
@@ -30,6 +32,12 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
   );
   const [userOrgId, setUserOrgId] = useState<number | null>(null);
   const [isFormReady, setIsFormReady] = useState(false);
+
+  // Enhanced error state
+  const setError = (message: string) => {
+    setSubmitError(message);
+    console.error('MainActivityForm Error:', message);
+  };
 
   // Get user organization ID
   useEffect(() => {
@@ -210,12 +218,17 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
     setSubmitError(null);
     
     try {
+      console.log('MainActivityForm: Starting form submission...');
+      console.log('Form data received:', data);
+      
       // Ensure we have user organization ID
       if (!userOrgId) {
         setSubmitError('User organization not found. Please refresh the page and try again.');
         setIsSubmitting(false);
         return;
       }
+      
+      console.log('User organization ID:', userOrgId);
 
       // Validate required fields
       if (!data.name?.trim()) {
@@ -241,6 +254,21 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
         setIsSubmitting(false);
         return;
       }
+      
+      // Ensure CSRF token is available
+      try {
+        await auth.getCurrentUser();
+        const csrfToken = Cookies.get('csrftoken');
+        if (!csrfToken) {
+          console.warn('No CSRF token found, attempting to get one...');
+          await axios.get('/api/auth/csrf/', { withCredentials: true });
+        }
+      } catch (csrfError) {
+        console.error('CSRF token error:', csrfError);
+        setError('Authentication error. Please refresh the page and try again.');
+        setIsSubmitting(false);
+        return;
+      }
 
       // Validate period selection
       const hasMonths = data.selected_months && data.selected_months.length > 0;
@@ -252,67 +280,59 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
         return;
       }
 
-      // Get current initiative data to validate weight
-      const currentActivities = await mainActivities.getByInitiative(initiativeId);
-      const existingActivities = currentActivities?.data || [];
-      
-      // Filter out current activity if editing
-      const otherActivities = existingActivities.filter(activity => 
-        !initialData || activity.id !== initialData.id
-      );
-      
-      // Calculate total weight of other activities
-      const otherActivitiesWeight = otherActivities.reduce((sum, activity) => 
-        sum + (Number(activity.weight) || 0), 0
-      );
-      
-      // Calculate expected weight (65% of initiative weight)
-      const expectedActivitiesWeight = parseFloat((safeInitiativeWeight * 0.65).toFixed(2));
-      
-      // Calculate what total would be with this activity
-      const newTotalWeight = otherActivitiesWeight + (Number(data.weight) || 0);
-      
-      // Frontend validation - prevent submission if weight exceeds limit
-      if (newTotalWeight > expectedActivitiesWeight) {
-        setSubmitError(
-          `Cannot create activity. Total activities weight would be ${newTotalWeight.toFixed(2)}% ` +
-          `which exceeds the required ${expectedActivitiesWeight.toFixed(2)}% ` +
-          `(65% of initiative weight ${safeInitiativeWeight.toFixed(2)}%). ` +
-          `Available weight: ${(expectedActivitiesWeight - otherActivitiesWeight).toFixed(2)}%`
-        );
-        return;
-      }
-      
-      // Check other validation errors
+      // Check other validation errors before submission
       const validationErrors = getValidationErrors();
       if (validationErrors.length > 0) {
         setSubmitError(validationErrors[0]);
+        setIsSubmitting(false);
+        return;
+      }
+      
+      // Validate targets match target type
+      const targetError = validateTargets();
+      if (targetError) {
+        setSubmitError(targetError);
+        setIsSubmitting(false);
         return;
       }
 
-      // If all frontend validation passes, submit
+      // Prepare activity data with proper type conversion
       const activityData = {
-        ...data,
-        // Ensure all required fields are properly set
         name: data.name?.trim(),
         baseline: data.baseline?.trim(),
-        q1_target: Number(data.q1_target) || 0,
-        q2_target: Number(data.q2_target) || 0, 
-        q3_target: Number(data.q3_target) || 0,
-        q4_target: Number(data.q4_target) || 0,
-        annual_target: Number(data.annual_target) || 0,
-        weight: Number(data.weight),
+        weight: parseFloat(String(data.weight || 0)),
+        target_type: data.target_type || 'cumulative',
+        q1_target: parseFloat(String(data.q1_target || 0)),
+        q2_target: parseFloat(String(data.q2_target || 0)),
+        q3_target: parseFloat(String(data.q3_target || 0)),
+        q4_target: parseFloat(String(data.q4_target || 0)),
+        annual_target: parseFloat(String(data.annual_target || 0)),
         initiative: initiativeId,
-        // Critical: Always assign organization for proper filtering
         organization: userOrgId,
         organization_id: userOrgId,
+        // Period selection based on type
         selected_months: periodType === 'months' ? data.selected_months : [],
         selected_quarters: periodType === 'quarters' ? data.selected_quarters : [],
-        // Preserve existing budget if editing
-        budget: initialData?.budget,
-        // Preserve target type
-        target_type: data.target_type || 'cumulative'
       };
+      
+      // Additional validation for production
+      if (!activityData.name || activityData.name.length < 3) {
+        setError('Activity name must be at least 3 characters long');
+        setIsSubmitting(false);
+        return;
+      }
+      
+      if (activityData.weight <= 0 || activityData.weight > 100) {
+        setError('Weight must be between 0.01 and 100');
+        setIsSubmitting(false);
+        return;
+      }
+      
+      if (activityData.annual_target <= 0) {
+        setError('Annual target must be greater than 0');
+        setIsSubmitting(false);
+        return;
+      }
 
       console.log('MainActivityForm: Submitting activity data:', {
         operation: initialData ? 'UPDATE' : 'CREATE',
@@ -320,72 +340,80 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
         name: activityData.name,
         weight: activityData.weight,
         organization: activityData.organization,
-        initiative: activityData.initiative
+        initiative: activityData.initiative,
+        target_type: activityData.target_type,
+        baseline: activityData.baseline,
+        annual_target: activityData.annual_target
       });
+      
       await onSubmit(activityData);
       
       console.log('MainActivityForm: Successfully submitted activity');
     } catch (error: any) {
       console.error('Error submitting form:', error);
+      console.error('Error details:', {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status,
+        config: error.config
+      });
       
-      // Parse backend error messages - handle HTML error pages
+      // Enhanced error handling for production
       let errorMessage = 'Failed to save activity.';
       
-      // Check if we got an HTML error page (Django debug page)
-      if (error.response?.data && typeof error.response.data === 'string' && 
-          error.response.data.includes('<!DOCTYPE html>')) {
+      if (error.response) {
+        const { status, data } = error.response;
         
-        // Extract error from HTML title or use generic message
-        if (error.response.data.includes('ValidationError')) {
-          // Check if it's a weight validation error
-          if (error.response.data.includes('exceed') || error.response.data.includes('weight')) {
-            errorMessage = `Activity weight exceeds the maximum allowed. ` +
-                          `Total activities weight cannot exceed ${(safeInitiativeWeight * 0.65).toFixed(2)}% ` +
-                          `(65% of initiative weight ${safeInitiativeWeight.toFixed(2)}%).`;
+        if (status === 500) {
+          // Server error - provide helpful message
+          if (typeof data === 'string' && data.includes('<!DOCTYPE html>')) {
+            // HTML error page
+            if (data.includes('ValidationError')) {
+              errorMessage = 'Validation error on server. Please check your input values.';
+            } else if (data.includes('IntegrityError')) {
+              errorMessage = 'Data integrity error. This activity name might already exist.';
+            } else {
+              errorMessage = 'Server error occurred. Please try again or contact support.';
+            }
           } else {
-            errorMessage = 'Validation error: Please check your input values.';
+            errorMessage = 'Server error occurred. Please try again.';
           }
+        } else if (status === 400) {
+          // Bad request - validation error
+          if (typeof data === 'object' && data !== null) {
+            if (data.detail) {
+              errorMessage = data.detail;
+            } else if (data.non_field_errors) {
+              errorMessage = Array.isArray(data.non_field_errors) 
+                ? data.non_field_errors[0] 
+                : data.non_field_errors;
+            } else if (data.name) {
+              errorMessage = Array.isArray(data.name) ? data.name[0] : data.name;
+            } else if (data.weight) {
+              const weightError = Array.isArray(data.weight) ? data.weight[0] : data.weight;
+              errorMessage = `Weight error: ${weightError}`;
+            } else {
+              // Get first error from any field
+              const firstError = Object.values(data)[0];
+              if (Array.isArray(firstError)) {
+                errorMessage = firstError[0];
+              } else if (typeof firstError === 'string') {
+                errorMessage = firstError;
+              }
+            }
+          } else if (typeof data === 'string') {
+            errorMessage = data;
+          }
+        } else if (status === 403) {
+          errorMessage = 'Permission denied. You may not have the required permissions.';
+        } else if (status === 404) {
+          errorMessage = 'Initiative not found. Please refresh the page and try again.';
         } else {
-          errorMessage = 'Server error occurred. Please try again.';
+          errorMessage = `Server error (${status}). Please try again.`;
         }
-      } else if (error.response?.data) {
-        // Handle JSON error responses
-        if (typeof error.response.data === 'string') {
-          errorMessage = error.response.data;
-        } else if (error.response.data.detail) {
-          errorMessage = error.response.data.detail;
-        } else if (error.response.data.message) {
-          errorMessage = error.response.data.message;
-        } else if (error.response.data.non_field_errors) {
-          errorMessage = Array.isArray(error.response.data.non_field_errors) 
-            ? error.response.data.non_field_errors[0] 
-            : error.response.data.non_field_errors;
-        } else if (error.response.data.name) {
-          errorMessage = Array.isArray(error.response.data.name) 
-            ? error.response.data.name[0] 
-            : error.response.data.name;
-        } else if (error.response.data.weight) {
-          const weightError = Array.isArray(error.response.data.weight) 
-            ? error.response.data.weight[0] 
-            : error.response.data.weight;
-          
-          // Convert backend weight error to user-friendly message
-          if (weightError.includes('exceed') || weightError.includes('65%')) {
-            errorMessage = `Activity weight exceeds the maximum allowed. ` +
-                          `Total activities weight cannot exceed ${(safeInitiativeWeight * 0.65).toFixed(2)}% ` +
-                          `(65% of initiative weight ${safeInitiativeWeight.toFixed(2)}%).`;
-          } else {
-            errorMessage = weightError;
-          }
-        } else {
-          // Try to extract any error message from the response
-          const firstError = Object.values(error.response.data)[0];
-          if (Array.isArray(firstError)) {
-            errorMessage = firstError[0];
-          } else if (typeof firstError === 'string') {
-            errorMessage = firstError;
-          }
-        }
+      } else if (error.request) {
+        // Network error
+        errorMessage = 'Network error. Please check your connection and try again.';
       } else if (error.message) {
         errorMessage = error.message;
       }
@@ -396,15 +424,126 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
     }
   };
 
-  const togglePeriodType = () => {
-    if (periodType === 'months') {
-      setValue('selected_months', []);
-      setPeriodType('quarters');
-    } else {
-      setValue('selected_quarters', []);
-      setPeriodType('months');
+  // Enhanced validation function
+  const validateTargets = () => {
+    try {
+      const baselineValue = baseline ? parseFloat(baseline) : null;
+
+      if (targetType === 'cumulative') {
+        const quarterly_sum = q1Target + q2Target + q3Target + q4Target;
+        if (Math.abs(quarterly_sum - annualTarget) > 0.01) {
+          return `For cumulative targets, sum of quarterly targets (${quarterly_sum}) must equal annual target (${annualTarget})`;
+        }
+      } else if (targetType === 'increasing') {
+        // Q1 must be greater than or equal to baseline
+        if (baselineValue !== null && q1Target < baselineValue) {
+          return `For increasing targets, Q1 target (${q1Target}) must be greater than or equal to baseline (${baselineValue})`;
+        }
+        if (!(q1Target <= q2Target && q2Target <= q3Target && q3Target <= q4Target)) {
+          return 'For increasing targets, quarterly targets must be in ascending order (Q1 ≤ Q2 ≤ Q3 ≤ Q4)';
+        }
+        if (Math.abs(q4Target - annualTarget) > 0.01) {
+          return `For increasing targets, Q4 target (${q4Target}) must equal annual target (${annualTarget})`;
+        }
+      } else if (targetType === 'decreasing') {
+        // Q1 must be less than or equal to baseline
+        if (baselineValue !== null && q1Target > baselineValue) {
+          return `For decreasing targets, Q1 target (${q1Target}) must be less than or equal to baseline (${baselineValue})`;
+        }
+        if (!(q1Target >= q2Target && q2Target >= q3Target && q3Target >= q4Target)) {
+          return 'For decreasing targets, quarterly targets must be in descending order (Q1 ≥ Q2 ≥ Q3 ≥ Q4)';
+        }
+        if (Math.abs(q4Target - annualTarget) > 0.01) {
+          return `For decreasing targets, Q4 target (${q4Target}) must equal annual target (${annualTarget})`;
+        }
+      } else if (targetType === 'constant') {
+        if (!(Math.abs(q1Target - annualTarget) < 0.01 && 
+              Math.abs(q2Target - annualTarget) < 0.01 && 
+              Math.abs(q3Target - annualTarget) < 0.01 && 
+              Math.abs(q4Target - annualTarget) < 0.01)) {
+          return `For constant targets, all quarterly targets must equal annual target (Q1=Q2=Q3=Q4=${annualTarget})`;
+        }
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('Error in validateTargets:', error);
+      return 'Error validating targets. Please check your input values.';
     }
-    setSubmitError(null);
+  };
+
+  // Enhanced form validation
+  const getValidationErrors = () => {
+    const errors: string[] = [];
+    
+    try {
+      // Check required fields
+      if (!currentName || !currentName.trim()) {
+        errors.push('Activity name is required');
+      } else if (currentName.trim().length < 3) {
+        errors.push('Activity name must be at least 3 characters');
+      }
+      
+      if (!currentWeight || currentWeight <= 0) {
+        errors.push('Weight must be greater than 0');
+      } else if (currentWeight > 100) {
+        errors.push('Weight cannot exceed 100%');
+      } else if (currentWeight > maxWeight) {
+        errors.push(`Weight cannot exceed ${maxWeight.toFixed(2)}%. Available: ${remainingWeight.toFixed(2)}%`);
+      }
+      
+      if (!baseline || !baseline.trim()) {
+        errors.push('Baseline is required');
+      }
+      
+      if (!annualTarget || annualTarget <= 0) {
+        errors.push('Annual target must be greater than 0');
+      }
+      
+      if (!hasPeriodSelected) {
+        errors.push('Please select at least one period (month or quarter)');
+      }
+      
+      // Target validation
+      const targetError = validateTargets();
+      if (targetError) {
+        errors.push(targetError);
+      }
+      
+      return errors;
+    } catch (error) {
+      console.error('Error in getValidationErrors:', error);
+      return ['Error validating form. Please check your input values.'];
+    }
+  };
+
+  // Check if form is valid
+  const isFormValid = () => {
+    try {
+      const errors = getValidationErrors();
+      return errors.length === 0 && 
+             Math.abs(calculatedYearlyTarget - annualTarget) < 0.01 &&
+             userOrgId !== null &&
+             isFormReady;
+    } catch (error) {
+      console.error('Error in isFormValid:', error);
+      return false;
+    }
+  };
+
+  const togglePeriodType = () => {
+    try {
+      if (periodType === 'months') {
+        setValue('selected_months', []);
+        setPeriodType('quarters');
+      } else {
+        setValue('selected_quarters', []);
+        setPeriodType('months');
+      }
+      setSubmitError(null);
+    } catch (error) {
+      console.error('Error toggling period type:', error);
+    }
   };
 
   // Show loading state until form is ready
@@ -436,14 +575,14 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
             
           {targetType === 'increasing' && (
             <>
-              <p><strong>Increasing Target:</strong> Q1 must equal or greaterthan baseline, quarterly values must increase (Q1≤Q2≤Q3≤Q4) and Q4 must equal the annual target.</p>
+              <p><strong>Increasing Target:</strong> Q1 must equal or greater than baseline, quarterly values must increase (Q1≤Q2≤Q3≤Q4) and Q4 must equal the annual target.</p>
               <p className="ml-4">Example: If baseline=25 and annual target=100, you might set Q1=25, Q2=50, Q3=75, Q4=100.</p>
             </>
           )}
             
           {targetType === 'decreasing' && (
             <>
-              <p><strong>Decreasing Target:</strong> Q1 must equal or lessthan baseline, quarterly values must decrease (Q1≥Q2≥Q3≥Q4) and Q4 must equal the annual target.</p>
+              <p><strong>Decreasing Target:</strong> Q1 must equal or less than baseline, quarterly values must decrease (Q1≥Q2≥Q3≥Q4) and Q4 must equal the annual target.</p>
               <p className="ml-4">Example: If baseline=100 and annual target=25, you might set Q1=100, Q2=75, Q3=50, Q4=25.</p>
             </>
           )}
@@ -454,7 +593,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
               <p className="ml-4">Example: If annual target=50, you must set Q1=50, Q2=50, Q3=50, Q4=50.</p>
             </>
           )}
-        </div>
+        }
       </div>
 
       {/* Validation Errors */}
@@ -481,7 +620,6 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
           <p className="text-sm text-red-600">{submitError}</p>
         </div>
       )}
-
 
       <div className="space-y-2">
         <label className="block text-sm font-medium text-gray-700">
@@ -918,7 +1056,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
         </button>
         <button
           type="submit"
-          disabled={isSubmitting || !isFormValid() || !isFormReady || !userOrgId}
+          disabled={isSubmitting || !isFormValid()}
           className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {isSubmitting ? (
