@@ -204,19 +204,9 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
   // Add effect to refresh modal data when sub-activities change
   useEffect(() => {
     if (selectedActivity) {
-      // Refetch the specific activity data to get updated sub-activities
-      const refreshActivityData = async () => {
-        try {
-          console.log('Refreshing activity data for modal');
-          await refetch();
-        } catch (error) {
-          console.error('Failed to refresh activity data:', error);
-        }
-      };
-      
-      refreshActivityData();
+      console.log('Selected activity updated in modal:', selectedActivity.name, 'Sub-activities:', selectedActivity.sub_activities?.length || 0);
     }
-  }, [selectedActivity?.sub_activities?.length, refetch]);
+  }, [selectedActivity?.sub_activities?.length]);
 
   const handleSelectActivity = (activity: any) => {
     console.log('Selected activity:', activity);
@@ -265,46 +255,38 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
       const response = await subActivities.create(subActivityData);
       console.log('Sub-activity created response:', response);
       
-      // Force refresh data
-      forceRefresh();
-      await refetch();
+      // Immediately refresh the main activities data
+      await queryClient.invalidateQueries({ queryKey: ['main-activities', initiativeId] });
+      const refreshedData = await refetch();
       
-      // Invalidate queries to force fresh data
-      queryClient.invalidateQueries({ queryKey: ['main-activities', initiativeId] });
+      // Find the updated activity with fresh sub-activities data
+      const updatedActivity = refreshedData.data?.data?.find(act => act.id === selectedActivity.id);
       
+      if (updatedActivity) {
+        console.log('Updating modal with fresh activity data - sub-activities count:', updatedActivity.sub_activities?.length || 0);
+        setSelectedActivity(updatedActivity);
+      }
+      
+      // Close the budget form but keep the modal open with updated data
       setShowBudgetForm(false);
       setSelectedActivityType(null);
       setCostingToolData(null);
       setEditingSubActivity(null);
-      
-      // Close modal and reopen with fresh data
-      setTimeout(() => {
-        refetch().then(() => {
-      // Force immediate data refresh
-          // Find the updated activity and reopen modal
-          const refreshedActivity = activitiesList?.data?.find(act => act.id === selectedActivity.id);
-          if (refreshedActivity) {
-            setSelectedActivity(refreshedActivity);
-            setShowModal(true);
-          }
-        });
-      }, 500);
     } catch (error) {
       console.error('Failed to save sub-activity:', error);
-      // Wait a moment for data to be saved, then refresh modal
-      setTimeout(async () => {
-        try {
-          const refreshedData = await refetch();
-          const updatedActivity = refreshedData.data?.data?.find(act => act.id === selectedActivity.id);
-          
-          if (updatedActivity) {
-            console.log('Modal updated with fresh data - sub-activities count:', updatedActivity.sub_activities?.length || 0);
-            setSelectedActivity(updatedActivity);
-          }
-        } catch (error) {
-          console.error('Error refreshing modal data:', error);
+      
+      // Even on error, try to refresh the modal data
+      try {
+        const refreshedData = await refetch();
+        const updatedActivity = refreshedData.data?.data?.find(act => act.id === selectedActivity.id);
+        
+        if (updatedActivity) {
+          console.log('Modal updated with fresh data after error - sub-activities count:', updatedActivity.sub_activities?.length || 0);
+          setSelectedActivity(updatedActivity);
         }
-      }, 500);
+      } catch (refreshError) {
+        console.error('Error refreshing modal data after save error:', refreshError);
+      }
     }
   };
 
@@ -313,22 +295,17 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
       try {
         await deleteSubActivityMutation.mutateAsync(subActivityId);
         
-        // Refresh modal data
-        setTimeout(() => {
-          // Wait for deletion to complete, then refresh modal
-          setTimeout(async () => {
-            try {
-              const refreshedData = await refetch();
-              const updatedActivity = refreshedData.data?.data?.find(act => act.id === selectedActivity.id);
-              
-              if (updatedActivity) {
-                setSelectedActivity(updatedActivity);
-              }
-            } catch (error) {
-              console.error('Error refreshing after deletion:', error);
-            }
-          }, 500);
-        }, 500);
+        // Immediately refresh the modal data after deletion
+        await queryClient.invalidateQueries({ queryKey: ['main-activities', initiativeId] });
+        const refreshedData = await refetch();
+        
+        // Update the modal with fresh data
+        const updatedActivity = refreshedData.data?.data?.find(act => act.id === selectedActivity.id);
+        
+        if (updatedActivity) {
+          console.log('Modal updated after deletion - sub-activities count:', updatedActivity.sub_activities?.length || 0);
+          setSelectedActivity(updatedActivity);
+        }
       } catch (error) {
         console.error('Failed to delete sub-activity:', error);
       }
