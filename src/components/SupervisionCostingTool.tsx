@@ -66,6 +66,7 @@ const SupervisionCostingTool: React.FC<SupervisionCostingToolProps> = ({
       numberOfSessions: 1,
       location: '',
       costMode: 'perdiem',
+      accommodationType: 'FULL_BOARD',
       numberOfSupervisorsWithAdditionalCost: 0,
       additionalSupervisorCosts: [],
       transportRequired: false,
@@ -434,7 +435,7 @@ const SupervisionCostingTool: React.FC<SupervisionCostingToolProps> = ({
     setAirTransportRoutes(updated);
   };
 
-  // Handle form submission - THIS WAS THE MISSING FUNCTION
+  // Handle form submission
   const handleFormSubmit = async (data: SupervisionCost) => {
     try {
       setIsCalculating(true);
@@ -706,7 +707,6 @@ const SupervisionCostingTool: React.FC<SupervisionCostingToolProps> = ({
             <p className="mt-1 text-sm text-red-600">{errors.numberOfSupervisorsWithAdditionalCost.message}</p>
           )}
         </div>
-                          {loc.is_hardship_area && ' (Hardship Area)'}
       </div>
 
       {/* Additional Locations Section */}
@@ -765,6 +765,7 @@ const SupervisionCostingTool: React.FC<SupervisionCostingToolProps> = ({
                     {locationsData.map(loc => (
                       <option key={loc.id} value={loc.id}>
                         {loc.name}, {loc.region}
+                        {loc.is_hardship_area && ' (Hardship Area)'}
                       </option>
                     ))}
                   </select>
