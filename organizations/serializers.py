@@ -198,105 +198,17 @@ class MainActivitySerializer(serializers.ModelSerializer):
     def get_funding_gap(self, obj):
         return obj.funding_gap
 
-    def validate_weight(self, value):
-        """Validate weight is positive and not exceeding 100"""
-        try:
-            weight = Decimal(str(value))
-            if weight <= 0:
-                raise serializers.ValidationError('Weight must be greater than 0')
-            if weight > 100:
-                raise serializers.ValidationError('Weight cannot exceed 100')
-            return weight
-        except (InvalidOperation, ValueError):
-            raise serializers.ValidationError('Weight must be a valid number')
-
-    def validate_name(self, value):
-        """Validate name is not empty and reasonable length"""
-        if not value or not value.strip():
-            raise serializers.ValidationError('Activity name is required')
-        
-        if len(value.strip()) < 2:
-            raise serializers.ValidationError('Activity name must be at least 2 characters')
-            
-        if len(value.strip()) > 255:
-            raise serializers.ValidationError('Activity name cannot exceed 255 characters')
-            
-        return value.strip()
-
-    def validate_baseline(self, value):
-        """Validate baseline is not empty"""
-        if not value or not value.strip():
-            raise serializers.ValidationError('Baseline is required')
-        return value.strip()
-
-    def validate_target_type(self, value):
-        """Validate target type is valid"""
-        valid_types = ['cumulative', 'increasing', 'decreasing', 'constant']
-        if value not in valid_types:
-            raise serializers.ValidationError(f'Target type must be one of: {", ".join(valid_types)}')
-        return value
-
-    def validate_annual_target(self, value):
-        """Validate annual target is positive"""
-        try:
-            target = Decimal(str(value))
-            if target <= 0:
-                raise serializers.ValidationError('Annual target must be greater than 0')
-            return target
-        except (InvalidOperation, ValueError):
-            raise serializers.ValidationError('Annual target must be a valid number')
-
-    def validate_q1_target(self, value):
-        """Validate Q1 target is not negative"""
-        try:
-            target = Decimal(str(value))
-            if target < 0:
-                raise serializers.ValidationError('Q1 target cannot be negative')
-            return target
-        except (InvalidOperation, ValueError):
-            raise serializers.ValidationError('Q1 target must be a valid number')
-
-    def validate_q2_target(self, value):
-        """Validate Q2 target is not negative"""
-        try:
-            target = Decimal(str(value))
-            if target < 0:
-                raise serializers.ValidationError('Q2 target cannot be negative')
-            return target
-        except (InvalidOperation, ValueError):
-            raise serializers.ValidationError('Q2 target must be a valid number')
-
-    def validate_q3_target(self, value):
-        """Validate Q3 target is not negative"""
-        try:
-            target = Decimal(str(value))
-            if target < 0:
-                raise serializers.ValidationError('Q3 target cannot be negative')
-            return target
-        except (InvalidOperation, ValueError):
-            raise serializers.ValidationError('Q3 target must be a valid number')
-
-    def validate_q4_target(self, value):
-        """Validate Q4 target is not negative"""
-        try:
-            target = Decimal(str(value))
-            if target < 0:
-                raise serializers.ValidationError('Q4 target cannot be negative')
-            return target
-        except (InvalidOperation, ValueError):
-            raise serializers.ValidationError('Q4 target must be a valid number')
 
     def validate(self, data):
-        """Cross-field validation"""
-        # Get the current instance for weight validation
-        instance = getattr(self, 'instance', None)
-        
+        """RESTORED ORIGINAL VALIDATION LOGIC"""
         # Ensure organization is set from request user if not provided
         if not data.get('organization'):
             user = self.context['request'].user
             user_org = user.organization_users.first()
             if user_org:
                 data['organization'] = user_org.organization
+            else:
+                raise serializers.ValidationError('No organization found for user')
             else:
                 raise serializers.ValidationError('No organization found for user')
 
@@ -307,91 +219,12 @@ class MainActivitySerializer(serializers.ModelSerializer):
         if not selected_months and not selected_quarters:
             raise serializers.ValidationError('At least one month or quarter must be selected')
 
-        # Skip weight validation during serializer validation to avoid double validation
-        # The model's clean() method will handle weight validation
+        # RESTORED: Let the model handle weight validation as before
+        # This ensures the original weight validation logic (initiative * 0.65) works
         return data
 
-    def validate_weight_against_initiative(self, initiative, new_weight, exclude_activity_id=None):
-        """Validate that total activities weight doesn't exceed 65% of initiative weight"""
-        try:
-            # Get all existing activities for this initiative
-            existing_activities = MainActivity.objects.filter(initiative=initiative)
-            
-            # Exclude current activity if editing
-            if exclude_activity_id:
-                existing_activities = existing_activities.exclude(id=exclude_activity_id)
-            
-            # Calculate total weight of other activities
-            other_activities_weight = sum(float(activity.weight) for activity in existing_activities)
-            
-            # Calculate expected weight (65% of initiative weight)
-            initiative_weight = float(initiative.weight)
-            expected_activities_weight = initiative_weight * 0.65
-            
-            # Check if new total would exceed expected weight
-            new_total_weight = other_activities_weight + float(new_weight)
-            
-            if new_total_weight > expected_activities_weight + 0.01:  # Small tolerance for floating point
-                raise serializers.ValidationError({
-                    'weight': [
-                        f'Total weight of activities ({new_total_weight:.2f}%) cannot exceed '
-                        f'{expected_activities_weight:.2f}% (65% of initiative weight {initiative_weight}%). '
-                        f'Other activities already use {other_activities_weight:.2f}%. '
-                        f'Maximum allowed for this activity: {max(0, expected_activities_weight - other_activities_weight):.2f}%'
-                    ]
-                })
-            
-            return True
-        except Exception as e:
-            # If validation fails for any reason, allow the model validation to handle it
-            print(f"Weight validation error: {e}")
-            return True
-
-    def create(self, validated_data):
-        """Create new MainActivity with proper weight validation"""
-        try:
-            initiative_id = validated_data.get('initiative')
-            new_weight = validated_data.get('weight')
-            
-            if initiative_id and new_weight:
-                # Validate weight before creation
-                self.validate_weight_against_initiative(initiative_id, new_weight)
-            
-            # Create the instance
-            instance = MainActivity.objects.create(**validated_data)
-            return instance
-        except DjangoValidationError as e:
-            if hasattr(e, 'message_dict'):
-                raise serializers.ValidationError(e.message_dict)
-            else:
-                raise serializers.ValidationError({'non_field_errors': [str(e)]})
-        except Exception as e:
-            raise serializers.ValidationError({'non_field_errors': [f'Failed to create main activity: {str(e)}']})
-
-    def update(self, instance, validated_data):
-        """Update MainActivity with proper weight validation"""
-        try:
-            initiative_id = validated_data.get('initiative', instance.initiative)
-            new_weight = validated_data.get('weight', instance.weight)
-            
-            if initiative_id and new_weight:
-                # Validate weight before update (exclude current instance)
-                self.validate_weight_against_initiative(initiative_id, new_weight, instance.id)
-            
-            # Update all fields
-            for attr, value in validated_data.items():
-                setattr(instance, attr, value)
-            
-            # Save with validation
-            instance.save()
-            return instance
-        except DjangoValidationError as e:
-            if hasattr(e, 'message_dict'):
-                raise serializers.ValidationError(e.message_dict)
-            else:
-                raise serializers.ValidationError({'non_field_errors': [str(e)]})
-        except Exception as e:
-            raise serializers.ValidationError({'non_field_errors': [f'Failed to update main activity: {str(e)}']})
+    # RESTORED: Let Django model handle creation/updating
+    # The model's clean() method has the proper weight validation logic
 
 class ActivityBudgetSerializer(serializers.ModelSerializer):
     total_funding = serializers.SerializerMethodField()
