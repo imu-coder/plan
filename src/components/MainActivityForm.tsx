@@ -4,7 +4,7 @@ import { useLanguage } from '../lib/i18n/LanguageContext';
 import { Loader, Calendar, AlertCircle, Info, CheckCircle } from 'lucide-react';
 import type { MainActivity, TargetType } from '../types/plan';
 import { MONTHS, QUARTERS, Month, Quarter, TARGET_TYPES } from '../types/plan';
-import { mainActivities } from '../lib/api';
+import { mainActivities, auth } from '../lib/api';
 
 interface MainActivityFormProps {
   initiativeId: string;
@@ -28,6 +28,29 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
   const [periodType, setPeriodType] = useState<'months' | 'quarters'>(
     initialData?.selected_quarters?.length ? 'quarters' : 'months'
   );
+  const [userOrgId, setUserOrgId] = useState<number | null>(null);
+  const [isFormReady, setIsFormReady] = useState(false);
+
+  // Get user organization ID
+  useEffect(() => {
+    const fetchUserData = async () => {
+      try {
+        const authData = await auth.getCurrentUser();
+        if (authData.userOrganizations && authData.userOrganizations.length > 0) {
+          setUserOrgId(authData.userOrganizations[0].organization);
+          setIsFormReady(true);
+          console.log('MainActivityForm: User organization ID set to:', authData.userOrganizations[0].organization);
+        } else {
+          setError('User organization not found. Please refresh the page.');
+        }
+      } catch (error) {
+        console.error('Failed to fetch user data:', error);
+        setError('Failed to load user data. Please refresh the page.');
+      }
+    };
+    
+    fetchUserData();
+  }, []);
 
   // Fetch initiative data to get its weight
   useEffect(() => {
@@ -187,6 +210,48 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
     setSubmitError(null);
     
     try {
+      // Ensure we have user organization ID
+      if (!userOrgId) {
+        setSubmitError('User organization not found. Please refresh the page and try again.');
+        setIsSubmitting(false);
+        return;
+      }
+
+      // Validate required fields
+      if (!data.name?.trim()) {
+        setSubmitError('Activity name is required');
+        setIsSubmitting(false);
+        return;
+      }
+
+      if (!data.weight || Number(data.weight) <= 0) {
+        setSubmitError('Weight must be greater than 0');
+        setIsSubmitting(false);
+        return;
+      }
+
+      if (!data.baseline?.trim()) {
+        setSubmitError('Baseline is required');
+        setIsSubmitting(false);
+        return;
+      }
+
+      if (!data.annual_target || Number(data.annual_target) <= 0) {
+        setSubmitError('Annual target is required and must be greater than 0');
+        setIsSubmitting(false);
+        return;
+      }
+
+      // Validate period selection
+      const hasMonths = data.selected_months && data.selected_months.length > 0;
+      const hasQuarters = data.selected_quarters && data.selected_quarters.length > 0;
+      
+      if (!hasMonths && !hasQuarters) {
+        setSubmitError('Please select at least one period (month or quarter)');
+        setIsSubmitting(false);
+        return;
+      }
+
       // Get current initiative data to validate weight
       const currentActivities = await mainActivities.getByInitiative(initiativeId);
       const existingActivities = currentActivities?.data || [];
@@ -228,18 +293,38 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
       // If all frontend validation passes, submit
       const activityData = {
         ...data,
+        // Ensure all required fields are properly set
+        name: data.name?.trim(),
+        baseline: data.baseline?.trim(),
         q1_target: Number(data.q1_target) || 0,
         q2_target: Number(data.q2_target) || 0, 
         q3_target: Number(data.q3_target) || 0,
         q4_target: Number(data.q4_target) || 0,
         annual_target: Number(data.annual_target) || 0,
+        weight: Number(data.weight),
         initiative: initiativeId,
+        // Critical: Always assign organization for proper filtering
+        organization: userOrgId,
+        organization_id: userOrgId,
         selected_months: periodType === 'months' ? data.selected_months : [],
         selected_quarters: periodType === 'quarters' ? data.selected_quarters : [],
-        budget: initialData?.budget
+        // Preserve existing budget if editing
+        budget: initialData?.budget,
+        // Preserve target type
+        target_type: data.target_type || 'cumulative'
       };
 
+      console.log('MainActivityForm: Submitting activity data:', {
+        operation: initialData ? 'UPDATE' : 'CREATE',
+        activityId: initialData?.id,
+        name: activityData.name,
+        weight: activityData.weight,
+        organization: activityData.organization,
+        initiative: activityData.initiative
+      });
       await onSubmit(activityData);
+      
+      console.log('MainActivityForm: Successfully submitted activity');
     } catch (error: any) {
       console.error('Error submitting form:', error);
       
@@ -271,6 +356,14 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
           errorMessage = error.response.data.detail;
         } else if (error.response.data.message) {
           errorMessage = error.response.data.message;
+        } else if (error.response.data.non_field_errors) {
+          errorMessage = Array.isArray(error.response.data.non_field_errors) 
+            ? error.response.data.non_field_errors[0] 
+            : error.response.data.non_field_errors;
+        } else if (error.response.data.name) {
+          errorMessage = Array.isArray(error.response.data.name) 
+            ? error.response.data.name[0] 
+            : error.response.data.name;
         } else if (error.response.data.weight) {
           const weightError = Array.isArray(error.response.data.weight) 
             ? error.response.data.weight[0] 
@@ -283,6 +376,14 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
                           `(65% of initiative weight ${safeInitiativeWeight.toFixed(2)}%).`;
           } else {
             errorMessage = weightError;
+          }
+        } else {
+          // Try to extract any error message from the response
+          const firstError = Object.values(error.response.data)[0];
+          if (Array.isArray(firstError)) {
+            errorMessage = firstError[0];
+          } else if (typeof firstError === 'string') {
+            errorMessage = firstError;
           }
         }
       } else if (error.message) {
@@ -305,6 +406,16 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
     }
     setSubmitError(null);
   };
+
+  // Show loading state until form is ready
+  if (!isFormReady) {
+    return (
+      <div className="flex items-center justify-center p-8">
+        <Loader className="h-6 w-6 animate-spin mr-2" />
+        <span>Loading form...</span>
+      </div>
+    );
+  }
 
   return (
     <form onSubmit={handleSubmit(handleFormSubmit)} className="space-y-6">
@@ -809,6 +920,8 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
           type="submit"
           disabled={isSubmitting || !isFormValid()}
           className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+            !isFormReady ||
+            !userOrgId ||
         >
           {isSubmitting ? (
             <span className="flex items-center">
