@@ -37,6 +37,7 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
   const queryClient = useQueryClient();
   const [validationSuccess, setValidationSuccess] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
   
   console.log('InitiativeList received:', {
     parentWeight,
@@ -48,7 +49,7 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
 
   // Fetch all initiatives based on parent type
   const { data: initiativesList, isLoading } = useQuery({
-    queryKey: ['initiatives', parentId, parentType, planKey],
+    queryKey: ['initiatives', parentId, parentType, planKey, refreshTrigger],
     queryFn: async () => {
       if (!parentId) {
         console.log('Missing parentId, cannot fetch initiatives');
@@ -75,8 +76,9 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
       return response;
     },
     enabled: !!parentId, // Only fetch when parentId is available
-    staleTime: 0, // Don't cache the data
-    cacheTime: 0,  // Don't store data in cache at all
+    staleTime: 1000, // Cache for 1 second to prevent excessive requests
+    refetchOnMount: true,
+    refetchOnWindowFocus: false,
   });
 
   // Add delete initiative mutation
@@ -84,9 +86,23 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
     mutationFn: (initiativeId: string) => initiatives.delete(initiativeId),
     onSuccess: () => {
       // Refresh initiatives list and weight summary after deletion
-      queryClient.invalidateQueries({ queryKey: ['initiatives', parentId, parentType] });
+      queryClient.invalidateQueries({ queryKey: ['initiatives'] });
+      setRefreshTrigger(prev => prev + 1);
     }
   });
+
+  // Force refresh function for external use
+  const forceRefresh = () => {
+    console.log('Force refreshing initiatives list');
+    queryClient.invalidateQueries({ queryKey: ['initiatives'] });
+    setRefreshTrigger(prev => prev + 1);
+  };
+
+  // Listen for initiative updates from parent component
+  useEffect(() => {
+    console.log('InitiativeList: planKey changed, refreshing data');
+    setRefreshTrigger(prev => prev + 1);
+  }, [planKey]);
 
   // Handle initiative deletion
   const handleDeleteInitiative = (initiativeId: string, e: React.MouseEvent) => {
@@ -144,9 +160,19 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
   console.log('Initiatives data:', initiativesList.data);
 
   // Calculate weight totals from actual initiatives data
-  const filteredInitiatives = (initiativesList.data || []).filter(i => 
-    i.is_default || !i.organization || i.organization === userOrgId
-  );
+  // CRITICAL FIX: Filter initiatives to show both default and user's organization initiatives
+  const filteredInitiatives = (initiativesList.data || []).filter(initiative => {
+    const isDefault = initiative.is_default === true;
+    const belongsToUserOrg = !initiative.organization || initiative.organization === userOrgId;
+    const belongsToOtherOrg = initiative.organization && initiative.organization !== userOrgId;
+    
+    // Include if it's default OR belongs to user's org, but exclude if it belongs to another org
+    const shouldInclude = (isDefault || belongsToUserOrg) && !belongsToOtherOrg;
+    
+    console.log(`Initiative "${initiative.name}": isDefault=${isDefault}, org=${initiative.organization}, userOrg=${userOrgId}, belongsToUserOrg=${belongsToUserOrg}, belongsToOtherOrg=${belongsToOtherOrg}, shouldInclude=${shouldInclude}`);
+    
+    return shouldInclude;
+  });
   
   console.log('InitiativeList: Weight calculation debug:', {
     totalInitiatives: initiativesList.data?.length || 0,
@@ -188,8 +214,7 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
   // Group initiatives by default vs custom
   const defaultInitiatives = initiativesList.data.filter(i => i.is_default);
   // Filter custom initiatives to only show those belonging to the user's organization or default ones
-  const customInitiatives = initiativesList.data.filter(i => 
-    !i.is_default && (i.organization === userOrgId || !i.organization));
+  const customInitiatives = filteredInitiatives.filter(i => !i.is_default);
 
   console.log('Default initiatives:', defaultInitiatives.length);
   console.log('Custom initiatives:', customInitiatives.length);
@@ -533,7 +558,10 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
       {isUserPlanner && (
         <div className="mt-4 text-center">
           <button 
-            onClick={() => onEditInitiative({ parentWeight, selectedObjectiveData })}
+            onClick={() => {
+              console.log('Creating new initiative with parentWeight:', parentWeight);
+              onEditInitiative({ parentWeight, selectedObjectiveData });
+            }}
             disabled={parentType === 'objective' && remaining_weight <= 0.01}
             className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
