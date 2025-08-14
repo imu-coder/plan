@@ -4,7 +4,8 @@ import { useLanguage } from '../lib/i18n/LanguageContext';
 import { Loader, Calendar, AlertCircle, Info, CheckCircle } from 'lucide-react';
 import type { MainActivity, TargetType } from '../types/plan';
 import { MONTHS, QUARTERS, Month, Quarter, TARGET_TYPES } from '../types/plan';
-import { auth } from '../lib/api';
+import { auth, api } from '../lib/api';
+import Cookies from 'js-cookie';
 
 interface MainActivityFormProps {
   initiativeId: string;
@@ -30,18 +31,33 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
   );
   const [userOrgId, setUserOrgId] = useState<number | null>(null);
   const [isFormReady, setIsFormReady] = useState(false);
+  const [authData, setAuthData] = useState<any>(null);
 
-  // Get user organization ID
+  // Get user organization ID and auth data
   useEffect(() => {
     const fetchUserData = async () => {
       try {
+        console.log('MainActivityForm: Fetching user authentication data...');
         const userData = await auth.getCurrentUser();
+        console.log('MainActivityForm: User data received:', userData);
+        
+        if (!userData.isAuthenticated) {
+          setSubmitError('User not authenticated. Please login again.');
+          return;
+        }
+        
+        setAuthData(userData);
+        
         if (userData.userOrganizations && userData.userOrganizations.length > 0) {
-          setUserOrgId(userData.userOrganizations[0].organization);
+          const orgId = userData.userOrganizations[0].organization;
+          setUserOrgId(orgId);
+          console.log('MainActivityForm: User organization ID set to:', orgId);
           setIsFormReady(true);
+        } else {
+          setSubmitError('No organization assigned to user. Please contact administrator.');
         }
       } catch (error) {
-        console.error('Failed to fetch user data:', error);
+        console.error('MainActivityForm: Failed to fetch user data:', error);
         setSubmitError('Failed to load user data. Please refresh the page.');
       }
     };
@@ -49,31 +65,61 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
     fetchUserData();
   }, []);
 
-  // Fetch initiative weight
+  // Fetch initiative weight with better error handling
   useEffect(() => {
     const fetchInitiativeData = async () => {
-      if (!initiativeId) return;
+      if (!initiativeId || !authData) return;
       
       try {
-        const response = await fetch(`/api/strategic-initiatives/${initiativeId}/`, {
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' }
-        });
+        console.log('MainActivityForm: Fetching initiative data for ID:', initiativeId);
         
-        if (response.ok) {
-          const data = await response.json();
-          if (data?.weight) {
-            setInitiativeWeight(parseFloat(data.weight));
+        // Ensure we have fresh auth before making API calls
+        await auth.getCurrentUser();
+        
+        // Try multiple ways to get initiative data
+        let initiativeData = null;
+        
+        try {
+          const response = await api.get(`/strategic-initiatives/${initiativeId}/`);
+          initiativeData = response.data;
+        } catch (apiError) {
+          console.warn('MainActivityForm: API call failed, trying direct fetch:', apiError);
+          
+          try {
+            const response = await fetch(`/api/strategic-initiatives/${initiativeId}/`, {
+              credentials: 'include',
+              headers: { 
+                'Content-Type': 'application/json',
+                'X-CSRFToken': Cookies.get('csrftoken') || ''
+              }
+            });
+            
+            if (response.ok) {
+              initiativeData = await response.json();
+            }
+          } catch (fetchError) {
+            console.error('MainActivityForm: Direct fetch also failed:', fetchError);
           }
         }
+        
+        if (initiativeData?.weight) {
+          const weight = parseFloat(initiativeData.weight);
+          if (!isNaN(weight) && weight > 0) {
+            setInitiativeWeight(weight);
+            console.log('MainActivityForm: Initiative weight set to:', weight);
+          }
+        } else {
+          console.warn('MainActivityForm: No valid weight found, using fallback');
+          setInitiativeWeight(35); // Reasonable fallback
+        }
       } catch (error) {
-        console.error('Error fetching initiative:', error);
+        console.error('MainActivityForm: Error fetching initiative:', error);
         setInitiativeWeight(35); // fallback
       }
     };
     
     fetchInitiativeData();
-  }, [initiativeId]);
+  }, [initiativeId, authData]);
 
   const { register, control, handleSubmit, watch, setValue, formState: { errors } } = useForm<Partial<MainActivity>>({
     defaultValues: {
@@ -196,11 +242,12 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
   const isFormValid = validationErrors.length === 0 && Math.abs(calculatedYearlyTarget - annualTarget) < 0.01;
 
   const handleFormSubmit = async (data: Partial<MainActivity>) => {
+    console.log('MainActivityForm: Starting form submission...');
     setIsSubmitting(true);
     setSubmitError(null);
     
     try {
-      // Validate required data
+      // Validate required data first
       if (!userOrgId) {
         throw new Error('User organization not found');
       }
@@ -213,29 +260,98 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
         throw new Error('Weight must be greater than 0');
       }
 
-      // Prepare clean data for Django
+      if (!initiativeId) {
+        throw new Error('Initiative ID is required');
+      }
+
+      // Ensure fresh authentication
+      console.log('MainActivityForm: Ensuring fresh authentication...');
+      const freshAuthData = await auth.getCurrentUser();
+      if (!freshAuthData.isAuthenticated) {
+        throw new Error('Authentication expired. Please login again.');
+      }
+
+      // Get fresh CSRF token
+      try {
+        await api.get('/auth/csrf/');
+        console.log('MainActivityForm: Fresh CSRF token obtained');
+      } catch (csrfError) {
+        console.warn('MainActivityForm: CSRF token fetch failed:', csrfError);
+        // Continue anyway, the API might still work
+      }
+
+      // Prepare clean data for Django - exactly matching the model fields
       const cleanData = {
         name: data.name.trim(),
-        initiative: initiativeId,
-        weight: Number(data.weight),
-        baseline: data.baseline?.trim() || '',
+        initiative: initiativeId, // String ID
+        weight: parseFloat(data.weight.toString()).toFixed(2), // Convert to string with 2 decimals
+        baseline: (data.baseline || '').trim(),
         target_type: data.target_type || 'cumulative',
-        q1_target: Number(data.q1_target) || 0,
-        q2_target: Number(data.q2_target) || 0,
-        q3_target: Number(data.q3_target) || 0,
-        q4_target: Number(data.q4_target) || 0,
-        annual_target: Number(data.annual_target) || 0,
-        organization: userOrgId,
+        q1_target: parseFloat((data.q1_target || 0).toString()).toFixed(2),
+        q2_target: parseFloat((data.q2_target || 0).toString()).toFixed(2),
+        q3_target: parseFloat((data.q3_target || 0).toString()).toFixed(2),
+        q4_target: parseFloat((data.q4_target || 0).toString()).toFixed(2),
+        annual_target: parseFloat((data.annual_target || 0).toString()).toFixed(2),
+        organization: userOrgId, // Integer organization ID
         selected_months: periodType === 'months' ? (data.selected_months || []) : [],
         selected_quarters: periodType === 'quarters' ? (data.selected_quarters || []) : []
       };
 
-      console.log('Submitting clean data:', cleanData);
+      console.log('MainActivityForm: Prepared clean data for submission:', cleanData);
+
+      // Validate data before sending
+      if (!cleanData.name || cleanData.name.length < 3) {
+        throw new Error('Activity name must be at least 3 characters long');
+      }
+
+      if (parseFloat(cleanData.weight) <= 0) {
+        throw new Error('Weight must be greater than 0');
+      }
+
+      if (parseFloat(cleanData.annual_target) <= 0) {
+        throw new Error('Annual target must be greater than 0');
+      }
+
+      // Validate periods
+      if (cleanData.selected_months.length === 0 && cleanData.selected_quarters.length === 0) {
+        throw new Error('At least one month or quarter must be selected');
+      }
+
+      // Call parent onSubmit with clean data
+      console.log('MainActivityForm: Calling parent onSubmit...');
       await onSubmit(cleanData);
+      console.log('MainActivityForm: Successfully submitted to parent');
       
     } catch (error: any) {
-      console.error('Form submission error:', error);
-      setSubmitError(error.message || 'Failed to save activity');
+      console.error('MainActivityForm: Form submission error:', error);
+      
+      let errorMessage = 'Failed to save activity';
+      
+      if (error.response?.data) {
+        if (typeof error.response.data === 'string') {
+          errorMessage = error.response.data;
+        } else if (error.response.data.detail) {
+          errorMessage = error.response.data.detail;
+        } else if (error.response.data.error) {
+          errorMessage = error.response.data.error;
+        } else if (error.response.data.message) {
+          errorMessage = error.response.data.message;
+        } else if (error.response.data.weight) {
+          errorMessage = Array.isArray(error.response.data.weight) 
+            ? error.response.data.weight[0] 
+            : error.response.data.weight;
+        } else if (error.response.data.name) {
+          errorMessage = Array.isArray(error.response.data.name) 
+            ? error.response.data.name[0] 
+            : error.response.data.name;
+        } else {
+          errorMessage = JSON.stringify(error.response.data);
+        }
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
+      setSubmitError(`Error: ${errorMessage}`);
     } finally {
       setIsSubmitting(false);
     }
