@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { mainActivities, auth, subActivities } from '../lib/api';
@@ -100,22 +99,9 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
         const activities = Array.isArray(response.data) ? response.data : [];
         console.log(`MainActivityList: Successfully fetched ${activities.length} activities from API`);
         
-        // Log each activity for debugging
+        // Enhanced logging for production debugging
         activities.forEach((activity, index) => {
-          console.log(`Activity ${index + 1}: "${activity.name}" (ID: ${activity.id}, Org: ${activity.organization || 'none'})`);
-        });
-        
-        if (!response) {
-          console.log('MainActivityList: No response from API');
-          return { data: [] };
-        }
-        
-        const activities2 = Array.isArray(response.data) ? response.data : [];
-        console.log(`MainActivityList: Processed ${activities2.length} activities from response`);
-        
-        // Log each activity for production debugging
-        activities2.forEach((activity, index) => {
-          console.log(`Activity ${index + 1}: "${activity.name}" (ID: ${activity.id}, Org: ${activity.organization || 'none'})`);
+          console.log(`Activity ${index + 1}: "${activity.name}" (ID: ${activity.id}, Org: ${activity.organization || 'none'}, SubActivities: ${activity.sub_activities?.length || 0})`);
         });
         
         return response;
@@ -125,30 +111,56 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
       }
     },
     enabled: !!initiativeId && userOrgId !== null,
-    staleTime: 30000, // 30 seconds cache for production stability
+    staleTime: 5 * 60 * 1000, // 5 minutes cache for production stability
+    cacheTime: 10 * 60 * 1000, // 10 minutes cache time
     refetchOnWindowFocus: false,
     retry: 1,
-    refetchInterval: false,
-    refetchOnReconnect: true
+    refetchInterval: false
   });
 
-  // PRODUCTION FIX: Refetch when initiative changes
+  // PRODUCTION FIX: Conservative refetch only when really needed
   useEffect(() => {
-    if (initiativeId && userOrgId !== null) {
-      console.log('MainActivityList: Initiative or user org changed, refetching');
+    // Only refetch if we have no data and both required params are available
+    if (initiativeId && userOrgId !== null && !activitiesList?.data) {
+      console.log('MainActivityList: No data available, triggering refetch');
       refetch();
     }
-  }, [initiativeId, userOrgId, refetch]);
+  }, [initiativeId, userOrgId, activitiesList?.data, refetch]);
 
   // Create sub-activity mutation with immediate cache update
   const createSubActivityMutation = useMutation({
     mutationFn: (subActivityData: any) => subActivities.create(subActivityData),
     onSuccess: (result) => {
-      console.log('Sub-activity created successfully, updating cache');
-      // Force immediate refetch without cache invalidation to prevent disappearing
+      console.log('Sub-activity created successfully:', result);
+      
+      // PRODUCTION FIX: Optimistic update instead of full refetch
+      const queryKey = ['main-activities', initiativeId, userOrgId, refreshKey];
+      const currentData = queryClient.getQueryData(queryKey);
+      
+      if (currentData?.data && Array.isArray(currentData.data)) {
+        // Find the main activity and add the new sub-activity
+        const updatedData = currentData.data.map(activity => {
+          if (activity.id === selectedActivity?.id) {
+            return {
+              ...activity,
+              sub_activities: [...(activity.sub_activities || []), result.data || result]
+            };
+          }
+          return activity;
+        });
+        
+        // Update the cache with new data
+        queryClient.setQueryData(queryKey, {
+          ...currentData,
+          data: updatedData
+        });
+      }
+      
+      // Gentle background refetch to sync with server (no UI impact)
       setTimeout(() => {
-        refetch();
-      }, 100);
+        queryClient.invalidateQueries({ queryKey: ['main-activities', initiativeId] });
+      }, 2000);
+      
       closeAllModals();
     },
     onError: (error) => {
@@ -160,13 +172,37 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
   const updateSubActivityMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: any }) => subActivities.update(id, data),
     onSuccess: (result) => {
+      console.log('Sub-activity updated successfully:', result);
+      
+      // PRODUCTION FIX: Optimistic update for edit operations
+      const queryKey = ['main-activities', initiativeId, userOrgId, refreshKey];
+      const currentData = queryClient.getQueryData(queryKey);
+      
+      if (currentData?.data && Array.isArray(currentData.data)) {
+        const updatedData = currentData.data.map(activity => {
+          if (activity.id === selectedActivity?.id && activity.sub_activities) {
+            return {
+              ...activity,
+              sub_activities: activity.sub_activities.map(sub => 
+                sub.id === selectedSubActivity?.id ? (result.data || result) : sub
+              )
+            };
+          }
+          return activity;
+        });
+        
+        // Update the cache with new data
+        queryClient.setQueryData(queryKey, {
+          ...currentData,
+          data: updatedData
+        });
+      }
+      
+      // Gentle background refetch to sync with server
       setTimeout(() => {
-        console.log('MainActivityList: Refreshing after sub-activity update');
-        refetch();
-      }, 200);
-      setTimeout(() => {
-        refetch();
-      }, 100);
+        queryClient.invalidateQueries({ queryKey: ['main-activities', initiativeId] });
+      }, 2000);
+      
       closeAllModals();
     },
     onError: (error) => {
@@ -178,11 +214,24 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
   const deleteActivityMutation = useMutation({
     mutationFn: (activityId: string) => mainActivities.delete(activityId),
     onSuccess: (result) => {
-      // PRODUCTION FIX: Gentle refresh without invalidating cache
+      console.log('Main activity deleted successfully');
+      
+      // PRODUCTION FIX: Optimistic removal from cache
+      const queryKey = ['main-activities', initiativeId, userOrgId, refreshKey];
+      const currentData = queryClient.getQueryData(queryKey);
+      
+      if (currentData?.data && Array.isArray(currentData.data)) {
+        const updatedData = currentData.data.filter(activity => activity.id !== activityId);
+        queryClient.setQueryData(queryKey, {
+          ...currentData,
+          data: updatedData
+        });
+      }
+      
+      // Background sync
       setTimeout(() => {
-        console.log('MainActivityList: Refreshing after sub-activity creation');
-        refetch();
-      }, 200);
+        queryClient.invalidateQueries({ queryKey: ['main-activities', initiativeId] });
+      }, 1000);
     },
     onError: (error) => {
       console.error('Failed to delete activity:', error);
