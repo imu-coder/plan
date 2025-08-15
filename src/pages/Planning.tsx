@@ -413,7 +413,7 @@ const Planning: React.FC = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
-  // Core state
+  // Move all hooks to the top level to fix hooks order error
   const [currentStep, setCurrentStep] = useState<PlanningStep>('plan-type');
   const [selectedPlanType, setSelectedPlanType] = useState<PlanType>('LEO/EO Plan');
   const [selectedObjectives, setSelectedObjectives] = useState<StrategicObjective[]>([]);
@@ -464,6 +464,24 @@ const Planning: React.FC = () => {
   const [success, setSuccess] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  
+  // Production optimizations state
+  const [isLoadingReviewData, setIsLoadingReviewData] = useState(false);
+  const [reviewRefreshKey, setReviewRefreshKey] = useState(0);
+  const [optimisticUpdates, setOptimisticUpdates] = useState<Set<string>>(new Set());
+
+  // Move debounced refresh to top level to fix hooks order
+  const debouncedRefresh = React.useCallback(
+    React.useMemo(() => {
+      let timeoutId: NodeJS.Timeout;
+      return () => {
+        clearTimeout(timeoutId);
+        timeoutId = setTimeout(() => setRefreshKey(prev => prev + 1), 300);
+      };
+    }, []), []
+  );
+
+  // Core state
   
   // PRODUCTION FIX: Add review-specific state for fresh data
   const [reviewRefreshKey, setReviewRefreshKey] = useState(0);
@@ -525,6 +543,7 @@ const Planning: React.FC = () => {
     checkExistingPlans();
   }, [userOrgId]);
 
+  
   // Fetch current user and organization
   useEffect(() => {
     const fetchUserData = async () => {
@@ -571,6 +590,74 @@ const Planning: React.FC = () => {
     
     fetchUserData();
   }, [navigate]);
+
+  // Handle review with fresh data
+  const handleReviewPlan = async () => {
+    try {
+      setIsLoadingReviewData(true);
+      setError(null);
+      
+      // Increment refresh key to trigger fresh data fetch in PlanReviewTable
+      setReviewRefreshKey(prev => prev + 1);
+      
+      // Small delay to ensure data is fresh
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      setCurrentStep('review');
+    } catch (error) {
+      console.error('Error preparing review data:', error);
+      setError('Failed to prepare review data');
+    } finally {
+      setIsLoadingReviewData(false);
+    }
+  };
+
+  // Handle fresh data received from PlanReviewTable
+  const handleReviewDataRefresh = (freshData: StrategicObjective[]) => {
+    console.log('Fresh data received in Planning from PlanReviewTable:', freshData.length);
+    // Update selected objectives with fresh data while preserving custom weights
+    setSelectedObjectives(freshData);
+  };
+
+  // Optimized save handlers with immediate feedback
+  const handleSaveWithOptimisticUpdate = async (
+    saveFunction: () => Promise<any>,
+    successMessage: string,
+    updateType: string
+  ) => {
+    const updateId = `${updateType}-${Date.now()}`;
+    
+    try {
+      // Add optimistic update
+      setOptimisticUpdates(prev => new Set(prev).add(updateId));
+      setError(null);
+      
+      // Show immediate success feedback
+      setSuccess(successMessage);
+      
+      // Perform the actual save
+      await saveFunction();
+      
+      // Trigger debounced refresh
+      debouncedRefresh();
+      
+      // Clear success message after delay
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (error: any) {
+      console.error(`Failed to save ${updateType}:`, error);
+      setError(error.message || `Failed to save ${updateType}`);
+      
+      // Clear the success message on error
+      setSuccess(null);
+    } finally {
+      // Remove optimistic update
+      setOptimisticUpdates(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(updateId);
+        return newSet;
+      });
+    }
+  };
 
   // Check permissions
   if (!isUserPlanner && !isAdmin) {
@@ -671,27 +758,15 @@ const Planning: React.FC = () => {
   };
 
   const handleSaveInitiative = async (data: any) => {
-    try {
-      setError(null);
-      
-      // PRODUCTION OPTIMIZATION: Optimistic update for immediate feedback
-      const updateId = `initiative-${Date.now()}`;
-      setOptimisticUpdates(prev => new Set(prev).add(updateId));
-      
-      // Show immediate success feedback
-      setSuccess('Initiative saved successfully');
-      setTimeout(() => setSuccess(null), 3000);
-      
+    await handleSaveWithOptimisticUpdate(async () => {
       if (editingInitiative?.id) {
         await initiatives.update(editingInitiative.id, data);
       } else {
         await initiatives.create(data);
       }
-      
-      // PRODUCTION OPTIMIZATION: Single refresh instead of multiple invalidations
-      debouncedRefresh();
-      
       setShowInitiativeForm(false);
+      setEditingInitiative(null);
+    }, 'Initiative saved successfully', 'initiative');
       setEditingInitiative(null);
       
       // Remove optimistic update
@@ -714,27 +789,15 @@ const Planning: React.FC = () => {
   };
 
   const handleSaveMeasure = async (data: any) => {
-    try {
-      setError(null);
-      
-      // PRODUCTION OPTIMIZATION: Optimistic update
-      const updateId = `measure-${Date.now()}`;
-      setOptimisticUpdates(prev => new Set(prev).add(updateId));
-      setSuccess('Performance measure saved successfully');
-      setTimeout(() => setSuccess(null), 3000);
-      
+    await handleSaveWithOptimisticUpdate(async () => {
       if (editingMeasure?.id) {
         await performanceMeasures.update(editingMeasure.id, data);
       } else {
         await performanceMeasures.create(data);
       }
-      
-      // PRODUCTION OPTIMIZATION: Debounced refresh
-      debouncedRefresh();
-      
       setShowMeasureForm(false);
       setEditingMeasure(null);
-      
+    }, 'Performance measure saved successfully', 'measure');
       setOptimisticUpdates(prev => {
         const newSet = new Set(prev);
         newSet.delete(updateId);
@@ -754,27 +817,15 @@ const Planning: React.FC = () => {
   };
 
   const handleSaveActivity = async (data: any) => {
-    try {
-      setError(null);
-      
-      // PRODUCTION OPTIMIZATION: Optimistic update
-      const updateId = `activity-${Date.now()}`;
-      setOptimisticUpdates(prev => new Set(prev).add(updateId));
-      setSuccess('Main activity saved successfully');
-      setTimeout(() => setSuccess(null), 3000);
-      
+    await handleSaveWithOptimisticUpdate(async () => {
       if (editingActivity?.id) {
         await mainActivities.update(editingActivity.id, data);
       } else {
         await mainActivities.create(data);
       }
-      
-      // PRODUCTION OPTIMIZATION: Debounced refresh
-      debouncedRefresh();
-      
       setShowActivityForm(false);
       setEditingActivity(null);
-      
+    }, 'Main activity saved successfully', 'activity');
       setOptimisticUpdates(prev => {
         const newSet = new Set(prev);
         newSet.delete(updateId);
@@ -828,35 +879,19 @@ const Planning: React.FC = () => {
   };
 
   const handleSaveBudget = async (budgetData: any) => {
-    try {
-      setError(null);
-      
+    await handleSaveWithOptimisticUpdate(async () => {
       if (!selectedActivity?.id) {
         throw new Error('No activity selected for budget');
       }
       
       console.log('Saving budget for activity:', selectedActivity.id);
-      console.log('Budget data:', budgetData);
-      
-      // PRODUCTION OPTIMIZATION: Optimistic update
-      setSuccess('Budget saved successfully');
-      setTimeout(() => setSuccess(null), 3000);
-      
-      // Use the custom budget update endpoint
-      const response = await mainActivities.updateBudget(selectedActivity.id, budgetData);
-      
-      console.log('Budget saved successfully:', response.data);
-      
-      // PRODUCTION OPTIMIZATION: Debounced refresh
-      debouncedRefresh();
+      await mainActivities.updateBudget(selectedActivity.id, budgetData);
       
       setShowBudgetForm(false);
       setSelectedActivity(null);
       setEditingBudget(null);
       setCostingToolData(null);
-    } catch (error: any) {
-      console.error('Failed to save budget:', error);
-      setError(error.message || 'Failed to save budget');
+    }, 'Budget saved successfully', 'budget');
       setSuccess(null);
     }
   };
@@ -915,9 +950,15 @@ const Planning: React.FC = () => {
     }
   };
 
-  // Plan submission handlers
-  const handleSubmitPlan = async () => {
+  // Manual refresh handler for review step
+  const handleRefreshReviewData = async () => {
     try {
+      setIsLoadingReviewData(true);
+      setReviewRefreshKey(prev => prev + 1);
+      await new Promise(resolve => setTimeout(resolve, 500));
+    } finally {
+      setIsLoadingReviewData(false);
+    }
       setIsSubmitting(true);
       setError(null);
       
@@ -1190,6 +1231,14 @@ const Planning: React.FC = () => {
               <div></div>
             </div>
 
+            {/* Loading indicator for review data preparation */}
+            {isLoadingReviewData && (
+              <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg flex items-center">
+                <Loader className="h-5 w-5 animate-spin mr-2 text-blue-600" />
+                <span className="text-blue-700">Loading latest plan data for review...</span>
+              </div>
+            )}
+
             <HorizontalObjectiveSelector
               onObjectivesSelected={handleObjectivesSelected}
               onProceed={handleProceedToPlanning}
@@ -1241,6 +1290,20 @@ const Planning: React.FC = () => {
                     </>
                   )}
                 </button>
+                {currentStep === 'planning' && (
+                  <button
+                    onClick={handleRefreshReviewData}
+                    disabled={isLoadingReviewData}
+                    className="flex items-center px-3 py-2 border border-blue-300 rounded-md text-sm text-blue-600 hover:text-blue-800 disabled:opacity-50"
+                  >
+                    {isLoadingReviewData ? (
+                      <Loader className="h-4 w-4 mr-2 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-4 w-4 mr-2" />
+                    )}
+                    Refresh Data
+                  </button>
+                )}
               </div>
             </div>
 
@@ -1457,6 +1520,10 @@ const Planning: React.FC = () => {
               toDate={toDate}
               planType={selectedPlanType}
               userOrgId={userOrgId}
+              refreshKey={reviewRefreshKey}
+              onDataRefresh={handleReviewDataRefresh}
+              isLoadingReview={isLoadingReviewData}
+              onRefreshRequest={handleRefreshReviewData}
               refreshKey={reviewRefreshKey}
               onDataRefresh={handleReviewDataRefresh}
               isLoadingReview={isLoadingReviewData}
