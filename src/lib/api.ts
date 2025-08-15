@@ -1108,6 +1108,28 @@ export const performanceMeasures = {
 // Main activities service
 export const mainActivities = {
   getAll: async () => {
+    try {
+      const response = await api.get('/main-activities/');
+      console.log('API: All main activities response:', response.data?.length || 0, 'items');
+      return response.data;
+    } catch (error) {
+      console.error('API: Error fetching all main activities:', error);
+      throw error;
+    }
+  },
+
+  getById: async (id: string) => {
+    try {
+      console.log('API: Getting main activity by ID:', id);
+      const response = await api.get(`/main-activities/${id}/`);
+      console.log('API: Main activity by ID response:', response.data);
+      return response.data;
+    } catch (error) {
+      console.error(`API: Error fetching main activity ${id}:`, error);
+      throw error;
+    }
+  },
+
   getByInitiative: async (initiativeId: string) => {
     console.log(`API: Getting main activities for initiative: ${initiativeId}`);
     
@@ -1119,7 +1141,7 @@ export const mainActivities = {
           'Cache-Control': 'no-cache, no-store, must-revalidate',
           'Pragma': 'no-cache'
         }
-  getByInitiative: async (initiativeId: string) => {
+      });
       
       console.log('API: Main activities response received:', {
         status: response.status,
@@ -1149,116 +1171,41 @@ export const mainActivities = {
       throw error;
     }
   },
-    const response = await api.get('/main-activities/');
-    console.log('API: All main activities response:', response.data?.length || 0, 'items');
-    return response.data;
-  },
-
-  getById: async (id: string) => {
-    console.log('API: Getting main activity by ID:', id);
-    const response = await api.get(`/main-activities/${id}/`);
-    console.log('API: Main activity by ID response:', response.data);
-    return response.data;
-  },
-
-  getByInitiative: async (initiativeId: string) => {
-    console.log('API: Getting main activities for initiative:', initiativeId);
-    
-    if (!initiativeId) {
-      console.error('API: No initiative ID provided to getByInitiative');
-      throw new Error('Initiative ID is required');
-    }
-    
-    try {
-      // Try direct API call with proper error handling
-      const response = await api.get(`/main-activities/?initiative=${initiativeId}`, {
-        timeout: 10000, // 10 second timeout
-        headers: {
-          'Accept': 'application/json',
-          'Content-Type': 'application/json'
-        }
-      });
-      
-      console.log('API: Main activities response received:', {
-        status: response.status,
-        dataType: typeof response.data,
-        isArray: Array.isArray(response.data),
-        hasResults: response.data?.results ? 'yes' : 'no',
-        directDataLength: Array.isArray(response.data) ? response.data.length : 'not array',
-        resultsLength: response.data?.results ? response.data.results.length : 'no results'
-      });
-      
-      // Handle different response formats
-      let activitiesData = [];
-      
-      if (Array.isArray(response.data)) {
-        // Direct array format
-        activitiesData = response.data;
-        console.log('API: Using direct array format with', activitiesData.length, 'activities');
-      } else if (response.data && Array.isArray(response.data.results)) {
-        // Paginated format
-        activitiesData = response.data.results;
-        console.log('API: Using paginated format with', activitiesData.length, 'activities');
-      } else if (response.data && response.data.data && Array.isArray(response.data.data)) {
-        // Nested data format
-        activitiesData = response.data.data;
-        console.log('API: Using nested data format with', activitiesData.length, 'activities');
-      } else {
-        console.warn('API: Unexpected response format for main activities:', response.data);
-        activitiesData = [];
-      }
-      
-      // Filter for the specific initiative (extra safety)
-      const filteredData = activitiesData.filter(activity => 
-        activity && activity.initiative && String(activity.initiative) === String(initiativeId)
-      );
-      
-      console.log(`API: Filtered ${activitiesData.length} activities to ${filteredData.length} for initiative ${initiativeId}`);
-      
-      return {
-        data: filteredData,
-        total: filteredData.length,
-        success: true
-      };
-      
-    } catch (error) {
-      console.error('API: Failed to fetch main activities for initiative:', initiativeId, error);
-      
-      // Enhanced error information
-      const errorInfo = {
-        message: error.message,
-        status: error.response?.status,
-        statusText: error.response?.statusText,
-        url: error.config?.url,
-        method: error.config?.method
-      };
-      
-      console.error('API: Detailed error info:', errorInfo);
-      
-      // Throw specific error for better debugging
-      throw new Error(`Failed to fetch main activities for initiative ${initiativeId}: ${error.message}`);
-    }
-  },
 
   create: async (data: any) => {
-    console.log('API: Creating main activity:', data);
-    const response = await api.post('/main-activities/', data);
-    console.log('API: Main activity created:', response.data);
-    return response.data;
+    try {
+      console.log('API: Creating main activity:', data);
+      const response = await api.post('/main-activities/', data);
+      console.log('API: Main activity created:', response.data);
+      return response.data;
+    } catch (error) {
+      console.error('API: Error creating main activity:', error);
+      throw error;
+    }
   },
-  },
+
   update: async (id: string, data: any) => {
-    console.log('API: Updating main activity:', id, data);
-    const response = await api.put(`/main-activities/${id}/`, data);
-    console.log('API: Main activity updated:', response.data);
-    return response.data;
+    try {
+      console.log('API: Updating main activity:', id, data);
+      const response = await api.put(`/main-activities/${id}/`, data);
+      console.log('API: Main activity updated:', response.data);
+      return response.data;
+    } catch (error) {
+      console.error(`API: Error updating main activity ${id}:`, error);
+      throw error;
+    }
   },
 
   delete: async (id: string) => {
-    console.log('API: Deleting main activity:', id);
-    const response = await api.delete(`/main-activities/${id}/`);
-    console.log('API: Main activity deleted successfully');
-    return response.data;
+    try {
+      console.log('API: Deleting main activity:', id);
+      const response = await api.delete(`/main-activities/${id}/`);
+      console.log('API: Main activity deleted successfully');
+      return response.data;
+    } catch (error) {
+      console.error(`API: Error deleting main activity ${id}:`, error);
+      throw error;
+    }
   },
 
   // Add method to get activities with sub-activities populated
@@ -1276,149 +1223,6 @@ export const mainActivities = {
       
     } catch (error) {
       console.error('API: Failed to fetch activities with sub-activities:', error);
-      throw error;
-    }
-  },
-  
-  async getByInitiative(initiativeId: string) {
-    try {
-      if (!initiativeId) {
-        console.warn('No initiative ID provided to mainActivities.getByInitiative');
-        return { data: [] };
-      }
-      
-      console.log(`Fetching main activities for initiative ${initiativeId} in production mode`);
-      
-      const timestamp = new Date().getTime();
-      const id = String(initiativeId);
-      
-      let response;
-      let retryCount = 0;
-      const maxRetries = 3;
-      
-      while (retryCount < maxRetries) {
-        try {
-          if (retryCount === 0) {
-            // First attempt: standard format with extended timeout
-            response = await api.get(`/main-activities/?initiative=${id}&_=${timestamp}`, {
-              timeout: 12000,
-              headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' }
-            });
-          } else if (retryCount === 1) {
-            // Second attempt: alternative parameter format
-            response = await api.get('/main-activities/', {
-              params: { 
-                initiative: id,
-                initiative_id: id, // Try both parameter names
-                _: timestamp + retryCount
-              },
-              timeout: 8000,
-              headers: { 'Cache-Control': 'no-cache' }
-            });
-          } else {
-            // Third attempt: simplified call
-            response = await api.get(`/main-activities/`, {
-              timeout: 5000,
-              params: { initiative: id }
-            });
-          }
-          
-          console.log(`Successfully fetched main activities for initiative ${id} on attempt ${retryCount + 1}`);
-          break;
-          
-        } catch (attemptError) {
-          retryCount++;
-          console.warn(`Main activities attempt ${retryCount} failed for initiative ${id}:`, attemptError);
-          
-          if (retryCount >= maxRetries) {
-            throw attemptError;
-          }
-          
-          // Wait before retry with exponential backoff
-          await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
-        }
-      }
-      
-      if (!response.data) {
-        console.warn(`No main activities data returned for initiative ${id}`);
-        return { data: [] };
-      }
-      
-      const data = response.data.results || response.data;
-      if (!Array.isArray(data)) {
-        console.warn(`Expected array but got for initiative ${id}:`, typeof data);
-        return { data: [] };
-      }
-      
-      return response;
-    } catch (error) {
-      console.warn(`Failed to get main activities for initiative ${initiativeId} after retries:`, error);
-      return { data: [] };
-    }
-  },
-  
-  async getById(id: string) {
-    try {
-      const response = await api.get(`/main-activities/${id}/`);
-      return response;
-    } catch (error) {
-      console.error(`Failed to get main activity ${id}:`, error);
-      throw error;
-    }
-  },
-  
-  async create(data: any) {
-    try {
-      await ensureCsrfToken();
-      
-      const submissionData = { ...data };
-      if (data.initiative) submissionData.initiative = String(data.initiative);
-      
-      if (!Array.isArray(submissionData.selected_months)) {
-        submissionData.selected_months = submissionData.selected_months ? [submissionData.selected_months] : [];
-      }
-      
-      if (!Array.isArray(submissionData.selected_quarters)) {
-        submissionData.selected_quarters = submissionData.selected_quarters ? [submissionData.selected_quarters] : [];
-      }
-      
-      const response = await api.post('/main-activities/', submissionData);
-      return response;
-    } catch (error) {
-      console.error('Failed to create main activity:', error);
-      throw error;
-    }
-  },
-  
-  async update(id: string, data: any) {
-    try {
-      await ensureCsrfToken();
-      
-      const submissionData = { ...data };
-      if (data.initiative) submissionData.initiative = String(data.initiative);
-      
-      if (!Array.isArray(submissionData.selected_months)) {
-        submissionData.selected_months = submissionData.selected_months ? [submissionData.selected_months] : [];
-      }
-      
-      if (!Array.isArray(submissionData.selected_quarters)) {
-        submissionData.selected_quarters = submissionData.selected_quarters ? [submissionData.selected_quarters] : [];
-      }
-      
-      const response = await api.patch(`/main-activities/${id}/`, submissionData);
-      return response;
-    } catch (error) {
-      console.error(`Failed to update main activity ${id}:`, error);
-      throw error;
-    }
-  },
-  
-  async delete(id: string) {
-    try {
-      const response = await api.delete(`/main-activities/${id}/`);
-      return response;
-    } catch (error) {
-      console.error(`Failed to delete main activity ${id}:`, error);
       throw error;
     }
   },
