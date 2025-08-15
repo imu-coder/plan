@@ -1,16 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { mainActivities, auth, subActivities } from '../lib/api';
-import { Activity, AlertCircle, CheckCircle, Edit, Trash2, Lock, PlusCircle, DollarSign, Building2, Info, Loader, Eye, X, Calculator } from 'lucide-react';
+import { mainActivities, auth, api } from '../lib/api';
+import { BarChart3, AlertCircle, CheckCircle, Edit, Trash2, Lock, PlusCircle, Building2, Info, DollarSign, RefreshCw, Loader } from 'lucide-react';
 import { useLanguage } from '../lib/i18n/LanguageContext';
-import type { MainActivity } from '../types/organization';
+import type { MainActivity } from '../types/plan';
 import { isPlanner } from '../types/user';
-import ActivityBudgetForm from './ActivityBudgetForm';
-import TrainingCostingTool from './TrainingCostingTool';
-import MeetingWorkshopCostingTool from './MeetingWorkshopCostingTool';
-import PrintingCostingTool from './PrintingCostingTool';
-import ProcurementCostingTool from './ProcurementCostingTool';
-import SupervisionCostingTool from './SupervisionCostingTool';
 
 interface MainActivityListProps {
   initiativeId: string;
@@ -19,18 +13,10 @@ interface MainActivityListProps {
   onSelectActivity?: (activity: MainActivity) => void;
   isNewPlan?: boolean;
   planKey?: string;
+  isUserPlanner: boolean;
+  userOrgId: number | null;
   refreshKey?: number;
 }
-
-const ACTIVITY_TYPES = [
-  { value: 'Training', label: 'Training', icon: '📚', description: 'Training activities and capacity building' },
-  { value: 'Meeting', label: 'Meeting', icon: '👥', description: 'Meetings and workshops' },
-  { value: 'Workshop', label: 'Workshop', icon: '🔧', description: 'Workshops and working sessions' },
-  { value: 'Printing', label: 'Printing', icon: '🖨️', description: 'Printing and documentation' },
-  { value: 'Procurement', label: 'Procurement', icon: '📦', description: 'Procurement and purchasing' },
-  { value: 'Supervision', label: 'Supervision', icon: '👁️', description: 'Supervision and monitoring' },
-  { value: 'Other', label: 'Other', icon: '⚙️', description: 'Other activities' }
-];
 
 const MainActivityList: React.FC<MainActivityListProps> = ({ 
   initiativeId,
@@ -39,539 +25,339 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
   onSelectActivity,
   isNewPlan = false,
   planKey = 'default',
-  refreshKey = 0
+  isUserPlanner,
+  userOrgId,
+  refreshKey = 0,
 }) => {
   const { t } = useLanguage();
   const queryClient = useQueryClient();
-  const [isUserPlanner, setIsUserPlanner] = useState(false);
-  const [userOrgId, setUserOrgId] = useState<number | null>(null);
   const [validationSuccess, setValidationSuccess] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [lastRefreshKey, setLastRefreshKey] = useState(refreshKey);
+  const [retryAttempt, setRetryAttempt] = useState(0);
+  const [isManualRefreshing, setIsManualRefreshing] = useState(false);
   
-  // Modal states
-  const [selectedActivity, setSelectedActivity] = useState<MainActivity | null>(null);
-  const [showActivityTypeModal, setShowActivityTypeModal] = useState(false);
-  const [showCostingModal, setShowCostingModal] = useState(false);
-  const [showBudgetModal, setShowBudgetModal] = useState(false);
-  const [showViewModal, setShowViewModal] = useState(false);
-  const [selectedActivityType, setSelectedActivityType] = useState<string>('');
-  const [selectedSubActivity, setSelectedSubActivity] = useState<any>(null);
-  const [costingToolData, setCostingToolData] = useState<any>(null);
-
-  // Get user data on mount
-  useEffect(() => {
-    const fetchUserData = async () => {
-      try {
-        const authData = await auth.getCurrentUser();
-        setIsUserPlanner(isPlanner(authData.userOrganizations));
-        
-        if (authData.userOrganizations && authData.userOrganizations.length > 0) {
-          setUserOrgId(authData.userOrganizations[0].organization);
-          console.log('MainActivityList: User org ID set to:', authData.userOrganizations[0].organization);
-          console.log('MainActivityList: User org ID set to:', authData.userOrganizations[0].organization);
-        }
-      } catch (error) {
-        console.error('Failed to fetch user data:', error);
-      }
-    };
-    
-    fetchUserData();
-  }, []);
-
-  // PRODUCTION-STABLE: Fetch main activities with robust error handling
-  const { data: activitiesList, isLoading, error, refetch } = useQuery({
-    queryKey: ['main-activities', initiativeId, userOrgId, refreshKey],
-    queryFn: async () => {
-      if (!initiativeId) {
-        console.log('MainActivityList: No initiativeId provided');
-        return { data: [] };
-      }
-      
-      console.log(`MainActivityList: Fetching activities for initiative ${initiativeId}, userOrg: ${userOrgId}`);
-      try {
-        const response = await mainActivities.getByInitiative(initiativeId);
-        console.log('MainActivityList: Raw API response:', response);
-        if (!response || !response.data) {
-          console.log('MainActivityList: No data in response');
-          return { data: [] };
-        }
-        
-        const activities = Array.isArray(response.data) ? response.data : [];
-        console.log(`MainActivityList: Successfully fetched ${activities.length} activities from API`);
-        
-        // Log each activity for debugging
-        activities.forEach((activity, index) => {
-          console.log(`Activity ${index + 1}: "${activity.name}" (ID: ${activity.id}, Org: ${activity.organization || 'none'})`);
-        });
-        
-        if (!response) {
-          console.log('MainActivityList: No response from API');
-          return { data: [] };
-        }
-        
-        const activities2 = Array.isArray(response.data) ? response.data : [];
-        console.log(`MainActivityList: Processed ${activities2.length} activities from response`);
-        
-        // Log each activity for production debugging
-        activities2.forEach((activity, index) => {
-          console.log(`Activity ${index + 1}: "${activity.name}" (ID: ${activity.id}, Org: ${activity.organization || 'none'})`);
-        });
-        
-        return response;
-      } catch (error) {
-        console.error('MainActivityList: API Error:', error);
-        throw error;
-      }
-    },
-    enabled: !!initiativeId && userOrgId !== null,
-    staleTime: 30000, // 30 seconds cache for production stability
-    refetchOnWindowFocus: false,
-    retry: 1,
-    refetchInterval: false,
-    refetchOnReconnect: true
+  console.log('MainActivityList initialized with:', {
+    initiativeId,
+    initiativeWeight,
+    userOrgId,
+    isUserPlanner,
+    refreshKey
   });
 
-  // PRODUCTION FIX: Refetch when initiative changes
-  useEffect(() => {
-    if (initiativeId && userOrgId !== null) {
-      console.log('MainActivityList: Initiative or user org changed, refetching');
-      refetch();
-    }
-  }, [initiativeId, userOrgId, refetch]);
-
-  // Create sub-activity mutation with immediate cache update
-  const createSubActivityMutation = useMutation({
-    mutationFn: (subActivityData: any) => subActivities.create(subActivityData),
-    onSuccess: (result, variables) => {
-      console.log('Sub-activity created successfully:', result);
-      
-      // PRODUCTION FIX: Optimistic cache update instead of refetch
-      const queryKey = ['main-activities', initiativeId, userOrgId, refreshKey];
-      const currentData = queryClient.getQueryData(queryKey);
-      
-      if (currentData?.data && Array.isArray(currentData.data)) {
-        console.log('Updating cache optimistically for sub-activity creation');
-        
-        // Find the parent main activity and add the new sub-activity
-        const updatedActivities = currentData.data.map(activity => {
-          if (activity.id === selectedActivity?.id) {
-            const newSubActivity = result.data || result;
-            const existingSubActivities = activity.sub_activities || [];
-            
-            // Ensure we don't duplicate
-            const subExists = existingSubActivities.some(sub => sub.id === newSubActivity.id);
-            if (!subExists) {
-              return {
-                ...activity,
-                sub_activities: [...existingSubActivities, newSubActivity]
-              };
-            }
-          }
-          return activity;
-        });
-        
-        // Update cache with optimistic data
-        queryClient.setQueryData(queryKey, {
-          ...currentData,
-          data: updatedActivities
-        });
-        
-        console.log('Cache updated optimistically with new sub-activity');
-      }
-      
-      closeAllModals();
-      
-      // PRODUCTION FIX: Gentle background sync after 3 seconds (no UI impact)
-      setTimeout(() => {
-        console.log('Background sync: Refreshing main activities data');
-        queryClient.invalidateQueries({ 
-          queryKey: ['main-activities', initiativeId],
-          exact: false
-        });
-      }, 3000);
-    },
-    onError: (error) => {
-      console.error('Failed to create sub-activity:', error);
-      closeAllModals();
-    }
-  });
-
-  // Update sub-activity mutation with immediate cache update
-  const updateSubActivityMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: any }) => subActivities.update(id, data),
-    onSuccess: (result, variables) => {
-      console.log('Sub-activity updated successfully:', result);
-      
-      // PRODUCTION FIX: Optimistic cache update for updates
-      const queryKey = ['main-activities', initiativeId, userOrgId, refreshKey];
-      const currentData = queryClient.getQueryData(queryKey);
-      
-      if (currentData?.data && Array.isArray(currentData.data)) {
-        console.log('Updating cache optimistically for sub-activity update');
-        
-        const updatedActivities = currentData.data.map(activity => {
-          if (activity.id === selectedActivity?.id && activity.sub_activities) {
-            return {
-              ...activity,
-              sub_activities: activity.sub_activities.map(sub => 
-                sub.id === variables.id ? (result.data || result) : sub
-              )
-            };
-          }
-          return activity;
-        });
-        
-        // Update cache with optimistic data
-        queryClient.setQueryData(queryKey, {
-          ...currentData,
-          data: updatedActivities
-        });
-      }
-      
-      closeAllModals();
-      
-      // Background sync after 3 seconds
-      setTimeout(() => {
-        queryClient.invalidateQueries({ 
-          queryKey: ['main-activities', initiativeId],
-          exact: false
-        });
-      }, 3000);
-    },
-    onError: (error) => {
-      console.error('Failed to update sub-activity:', error);
-      closeAllModals();
-    }
-  });
-
-  // Delete activity mutation with immediate cache update
-  const deleteActivityMutation = useMutation({
-    mutationFn: (activityId: string) => mainActivities.delete(activityId),
-    onSuccess: (result, activityId) => {
-      console.log('Main activity deleted successfully:', activityId);
-      
-      // PRODUCTION FIX: Optimistic removal from cache
-      const queryKey = ['main-activities', initiativeId, userOrgId, refreshKey];
-      const currentData = queryClient.getQueryData(queryKey);
-      
-      if (currentData?.data && Array.isArray(currentData.data)) {
-        const updatedData = currentData.data.filter(activity => activity.id !== activityId);
-        queryClient.setQueryData(queryKey, {
-          ...currentData,
-          data: updatedData
-        });
-        console.log('Optimistically removed deleted activity from cache');
-      }
-      
-      // Background sync after 1 second
-      setTimeout(() => {
-        queryClient.invalidateQueries({ 
-          queryKey: ['main-activities', initiativeId],
-          exact: false
-        });
-      }, 1000);
-    },
-    onError: (error) => {
-      console.error('Failed to delete activity:', error);
-    }
-  });
-
-  // Manual refresh function
-  const handleManualRefresh = () => {
-    console.log('MainActivityList: Manual refresh triggered');
+  // Force refresh function for external use
+  const forceRefresh = () => {
+    console.log('Force refreshing main activities list');
+    setRefreshTrigger(prev => prev + 1);
+    setRetryAttempt(prev => prev + 1);
+    queryClient.invalidateQueries({ queryKey: ['main-activities', initiativeId] });
     refetch();
   };
 
-  // PRODUCTION-SAFE: Comprehensive data validation and logging
-  const activitiesData = activitiesList?.data;
-  console.log('MainActivityList: Current render state:', {
-    hasActivitiesList: !!activitiesList,
-    dataType: activitiesData ? (Array.isArray(activitiesData) ? 'array' : typeof activitiesData) : 'none',
-    dataLength: Array.isArray(activitiesData) ? activitiesData.length : 0,
-    userOrgId,
-    initiativeId,
-    isLoading,
-    hasError: !!error
-  });
-
-  // CRITICAL: Ensure we always have valid array data
-  const safeActivitiesData = Array.isArray(activitiesData) ? activitiesData : [];
-  console.log('MainActivityList: Processing', safeActivitiesData.length, 'total activities');
-
-  // PRODUCTION-OPTIMIZED: Very permissive filtering for maximum compatibility
-  const displayActivities = safeActivitiesData.filter(activity => {
-    if (!activity) {
-      console.log('MainActivityList: Skipping null/undefined activity');
-      return false;
+  // Listen for external refresh key changes
+  useEffect(() => {
+    if (refreshKey !== lastRefreshKey) {
+      console.log('MainActivityList: External refresh key changed, refreshing data');
+      setLastRefreshKey(refreshKey);
+      forceRefresh();
     }
-    
-    // PRODUCTION FIX: Ultra-permissive filtering to prevent disappearing activities
-    const hasNoOrganization = !activity.organization || 
-                             activity.organization === null || 
-                             activity.organization === '' ||
-                             activity.organization === 'null' ||
-                             activity.organization === undefined;
-    
-    const belongsToUserOrg = userOrgId && activity.organization && 
-                            (String(activity.organization) === String(userOrgId) ||
-                             Number(activity.organization) === Number(userOrgId));
-    
-    const isDefault = activity.is_default === true;
-    
-    // CRITICAL FIX: Very permissive inclusion rules
-    const shouldInclude = hasNoOrganization || belongsToUserOrg || isDefault;
-    
-    // Enhanced logging for debugging disappearing activities
-    if (!shouldInclude) {
-      console.log(`MainActivityList: FILTERED OUT "${activity.name}" - org:${activity.organization}, userOrg:${userOrgId}, hasNoOrg:${hasNoOrganization}, belongsToUser:${belongsToUserOrg}, isDefault:${isDefault}`);
+  }, [refreshKey, lastRefreshKey]);
+
+  // Production-safe API call with multiple fallback strategies
+  const fetchMainActivitiesSafely = async () => {
+    if (!initiativeId) {
+      console.log('MainActivityList: Missing initiativeId, cannot fetch activities');
+      return { data: [] };
     }
+
+    console.log(`MainActivityList: Fetching activities for initiative ${initiativeId} (attempt ${retryAttempt + 1})`);
     
-    console.log(`MainActivityList: "${activity.name}" - org:${activity.organization}, userOrg:${userOrgId}, noOrg:${hasNoOrganization}, belongsToUser:${belongsToUserOrg}, isDefault:${isDefault}, include:${shouldInclude}`);
-    
-    return shouldInclude;
-  });
-
-  console.log(`MainActivityList: FINAL DISPLAY RESULT - showing ${displayActivities.length} of ${safeActivitiesData.length} total activities`, {
-    initiativeId,
-    userOrgId,
-    totalFromAPI: safeActivitiesData.length,
-    afterFiltering: displayActivities.length,
-    isLoading,
-    cacheKey: `main-activities-${initiativeId}-${userOrgId}-${refreshKey}`
-  });
-
-  // Close all modals
-  const closeAllModals = () => {
-    setShowActivityTypeModal(false);
-    setShowCostingModal(false);
-    setShowBudgetModal(false);
-    setShowViewModal(false);
-    setSelectedActivity(null);
-    setSelectedSubActivity(null);
-    setSelectedActivityType('');
-    setCostingToolData(null);
-  };
-
-  // Handle add sub-activity click - Step 1: Show activity types
-  const handleAddSubActivity = (activity: MainActivity) => {
-    console.log('Adding sub-activity to:', activity.name);
-    setSelectedActivity(activity);
-    setSelectedSubActivity(null); // Clear any existing sub-activity
-    setShowActivityTypeModal(true);
-  };
-
-  // Handle activity type selection - Step 2: Show costing modal
-  const handleActivityTypeSelect = (activityType: string) => {
-    console.log('Activity type selected:', activityType);
-    setSelectedActivityType(activityType);
-    setShowActivityTypeModal(false);
-    
-    // For 'Other' type, skip costing tool and go directly to budget form
-    if (activityType === 'Other') {
-      setCostingToolData({
-        totalBudget: 0,
-        estimated_cost_with_tool: 0,
-        activity_type: activityType
-      });
-      setShowBudgetModal(true);
-    } else {
-      setShowCostingModal(true);
-    }
-  };
-
-  // Handle costing calculation - Step 3: Show budget form
-  const handleCostingCalculation = (costingData: any) => {
-    console.log('Costing calculation completed:', costingData);
-    setCostingToolData({
-      ...costingData,
-      activity_type: selectedActivityType
-    });
-    setShowCostingModal(false);
-    setShowBudgetModal(true);
-  };
-
-  // Handle budget form submission - Step 4: Save sub-activity
-  const handleBudgetSubmit = async (budgetData: any) => {
     try {
-      console.log('Submitting budget data for sub-activity');
+      // Strategy 1: Try the dedicated getByInitiative method
+      console.log('MainActivityList: Attempt 1 - Using mainActivities.getByInitiative');
+      const response = await mainActivities.getByInitiative(initiativeId);
       
-      const subActivityData = {
-        main_activity: selectedActivity?.id,
-        name: budgetData.name || `${selectedActivityType} Activity`,
-        activity_type: selectedActivityType,
-        description: budgetData.description || '',
-        budget_calculation_type: costingToolData ? 'WITH_TOOL' : 'WITHOUT_TOOL',
-        estimated_cost_with_tool: costingToolData?.totalBudget || 0,
-        estimated_cost_without_tool: budgetData.estimated_cost_without_tool || 0,
-        government_treasury: budgetData.government_treasury || 0,
-        sdg_funding: budgetData.sdg_funding || 0,
-        partners_funding: budgetData.partners_funding || 0,
-        other_funding: budgetData.other_funding || 0,
-        training_details: costingToolData?.training_details || budgetData.training_details,
-        meeting_workshop_details: costingToolData?.meeting_workshop_details || budgetData.meeting_workshop_details,
-        procurement_details: costingToolData?.procurement_details || budgetData.procurement_details,
-        printing_details: costingToolData?.printing_details || budgetData.printing_details,
-        supervision_details: costingToolData?.supervision_details || budgetData.supervision_details,
-        partners_details: budgetData.partners_details
-      };
-
-      console.log('Creating sub-activity with data:', subActivityData);
-      
-      if (selectedSubActivity) {
-        await updateSubActivityMutation.mutateAsync({
-          id: selectedSubActivity.id,
-          data: subActivityData
-        });
+      if (response?.data && Array.isArray(response.data)) {
+        console.log(`MainActivityList: Success! Found ${response.data.length} activities via getByInitiative`);
+        return response;
       } else {
-        await createSubActivityMutation.mutateAsync(subActivityData);
+        console.warn('MainActivityList: getByInitiative returned invalid data format:', response);
+        throw new Error('Invalid response format from getByInitiative');
       }
-    } catch (error) {
-      console.error('Error saving sub-activity:', error);
-      throw error;
+    } catch (error1) {
+      console.warn('MainActivityList: Attempt 1 failed:', error1);
+      
+      try {
+        // Strategy 2: Direct API call with query params
+        console.log('MainActivityList: Attempt 2 - Direct API call with query params');
+        const response = await api.get(`/main-activities/?initiative=${initiativeId}`);
+        
+        let activitiesData = response.data?.results || response.data || [];
+        
+        if (!Array.isArray(activitiesData)) {
+          console.warn('MainActivityList: Direct API call returned non-array:', activitiesData);
+          activitiesData = [];
+        }
+        
+        console.log(`MainActivityList: Success! Found ${activitiesData.length} activities via direct API`);
+        return { data: activitiesData };
+        
+      } catch (error2) {
+        console.warn('MainActivityList: Attempt 2 failed:', error2);
+        
+        try {
+          // Strategy 3: Get all activities and filter client-side
+          console.log('MainActivityList: Attempt 3 - Get all activities and filter');
+          const response = await mainActivities.getAll();
+          
+          let allActivities = response?.data || [];
+          if (!Array.isArray(allActivities)) {
+            allActivities = allActivities.results || [];
+          }
+          
+          const filteredActivities = allActivities.filter((activity: any) => 
+            activity && activity.initiative && String(activity.initiative) === String(initiativeId)
+          );
+          
+          console.log(`MainActivityList: Success! Found ${filteredActivities.length} activities via filtering all`);
+          return { data: filteredActivities };
+          
+        } catch (error3) {
+          console.error('MainActivityList: All attempts failed:', { error1, error2, error3 });
+          throw new Error(`Failed to fetch main activities: ${error3.message}`);
+        }
+      }
     }
   };
 
-  // Handle view sub-activity - Show view modal
-  const handleViewSubActivity = (activity: MainActivity, subActivity: any, e: React.MouseEvent) => {
-    e.stopPropagation();
-    console.log('Viewing sub-activity:', subActivity.name);
-    setSelectedActivity(activity);
-    setSelectedSubActivity(subActivity);
-    setShowViewModal(true);
-  };
+  // Fetch all main activities for this initiative with retry logic
+  const { data: activitiesList, isLoading, refetch, error: fetchError } = useQuery({
+    queryKey: ['main-activities', initiativeId, planKey, refreshTrigger, refreshKey, retryAttempt],
+    queryFn: fetchMainActivitiesSafely,
+    enabled: !!initiativeId && !!userOrgId,
+    staleTime: 0,
+    cacheTime: 5 * 60 * 1000, // 5 minutes
+    refetchOnMount: true,
+    refetchOnWindowFocus: false,
+    retry: 3,
+    retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 30000),
+    onError: (error) => {
+      console.error('MainActivityList: Query error:', error);
+    },
+    onSuccess: (data) => {
+      console.log('MainActivityList: Query success, activities loaded:', data?.data?.length || 0);
+    }
+  });
 
-  // Handle edit sub-activity - Start edit flow
-  const handleEditSubActivity = (activity: MainActivity, subActivity: any) => {
-    console.log('Editing sub-activity:', subActivity.name);
-    setSelectedActivity(activity);
-    setSelectedSubActivity(subActivity);
-    setSelectedActivityType(subActivity.activity_type || 'Other');
-    
-    // If it has costing tool data, show costing modal first
-    if (subActivity.budget_calculation_type === 'WITH_TOOL') {
-      setCostingToolData({
-        totalBudget: subActivity.estimated_cost_with_tool,
-        activity_type: subActivity.activity_type,
-        training_details: subActivity.training_details,
-        meeting_workshop_details: subActivity.meeting_workshop_details,
-        procurement_details: subActivity.procurement_details,
-        printing_details: subActivity.printing_details,
-        supervision_details: subActivity.supervision_details
+  // Delete activity mutation with optimistic updates
+  const deleteActivityMutation = useMutation({
+    mutationFn: (activityId: string) => {
+      console.log('MainActivityList: Deleting activity:', activityId);
+      return mainActivities.delete(activityId);
+    },
+    onMutate: async (activityId) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ 
+        queryKey: ['main-activities', initiativeId] 
       });
-      setShowCostingModal(true);
-    } else {
-      // Go directly to budget form for manual entries
-      setShowBudgetModal(true);
+
+      // Snapshot the previous value
+      const previousActivities = queryClient.getQueryData<{ data: MainActivity[] }>(
+        ['main-activities', initiativeId, planKey, refreshTrigger, refreshKey, retryAttempt]
+      );
+
+      // Optimistically update to the new value
+      if (previousActivities?.data) {
+        queryClient.setQueryData(
+          ['main-activities', initiativeId, planKey, refreshTrigger, refreshKey, retryAttempt],
+          {
+            ...previousActivities,
+            data: previousActivities.data.filter(activity => activity.id !== activityId)
+          }
+        );
+      }
+
+      return { previousActivities };
+    },
+    onError: (err, activityId, context) => {
+      console.error('Failed to delete activity:', err);
+      // Rollback to previous state on error
+      if (context?.previousActivities) {
+        queryClient.setQueryData(
+          ['main-activities', initiativeId, planKey, refreshTrigger, refreshKey, retryAttempt],
+          context.previousActivities
+        );
+      }
+    },
+    onSettled: () => {
+      // Gentle background refresh (doesn't clear UI)
+      setTimeout(() => {
+        queryClient.invalidateQueries({ 
+          queryKey: ['main-activities', initiativeId] 
+        });
+      }, 1000);
+    }
+  });
+
+  // Production-safe activity filtering
+  const filteredActivities = React.useMemo(() => {
+    console.log('MainActivityList: Filtering activities for user org:', userOrgId);
+    
+    if (!activitiesList?.data || !Array.isArray(activitiesList.data)) {
+      console.log('MainActivityList: No activities data to filter');
+      return [];
+    }
+
+    console.log('MainActivityList: Raw activities from API:', activitiesList.data.length);
+    
+    // PRODUCTION-SAFE: Ultra-permissive filtering to prevent data loss
+    const filtered = activitiesList.data.filter(activity => {
+      if (!activity) {
+        console.log('MainActivityList: Skipping null activity');
+        return false;
+      }
+      
+      // Ultra-permissive organization matching
+      const hasNoOrg = !activity.organization || 
+                       activity.organization === null || 
+                       activity.organization === '' ||
+                       activity.organization === 'null' ||
+                       activity.organization === undefined ||
+                       activity.organization === 0;
+                       
+      const belongsToUserOrg = userOrgId && activity.organization && 
+                              Number(activity.organization) === Number(userOrgId);
+      
+      // Also check organization_name as backup
+      const hasOrgName = activity.organization_name === organizationName;
+      
+      const shouldInclude = hasNoOrg || belongsToUserOrg || hasOrgName;
+      
+      console.log(`MainActivityList: Activity "${activity.name}" - org:${activity.organization}, userOrg:${userOrgId}, orgName:${activity.organization_name}, include:${shouldInclude}`);
+      
+      return shouldInclude;
+    });
+    
+    console.log(`MainActivityList: Filtered ${activitiesList.data.length} total to ${filtered.length} for user org`);
+    
+    return filtered;
+  }, [activitiesList?.data, userOrgId]);
+
+  // Manual refresh handler
+  const handleManualRefresh = async () => {
+    setIsManualRefreshing(true);
+    try {
+      console.log('MainActivityList: Manual refresh triggered');
+      setRetryAttempt(prev => prev + 1);
+      await refetch();
+      console.log('MainActivityList: Manual refresh completed');
+    } catch (error) {
+      console.error('MainActivityList: Manual refresh failed:', error);
+    } finally {
+      setIsManualRefreshing(false);
     }
   };
 
-  // Handle main activity deletion
+  // Handle activity deletion
   const handleDeleteActivity = (activityId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     
-    if (window.confirm('Are you sure you want to delete this activity? This will also delete all sub-activities. This action cannot be undone.')) {
+    if (window.confirm('Are you sure you want to delete this activity? This action cannot be undone.')) {
       deleteActivityMutation.mutate(activityId);
     }
   };
 
-  // Handle activity validation
-  const handleValidateActivities = () => {
-    setValidationSuccess(null);
-    setValidationError(null);
-    
-    if (isWeightValid) {
-      setValidationSuccess(`Activity weights are valid (${totalActivitiesWeight.toFixed(2)}% ≤ ${maxAllowedWeight}%)`);
-      setTimeout(() => setValidationSuccess(null), 3000);
-    } else {
-      setValidationError(`Activity weights (${totalActivitiesWeight.toFixed(2)}%) exceed maximum allowed (${maxAllowedWeight}%)`);
-      setTimeout(() => setValidationError(null), 5000);
-    }
-  };
-
   // Calculate weight totals
-  const totalActivitiesWeight = displayActivities.reduce((sum, activity) => 
+  const totalActivitiesWeight = filteredActivities.reduce((sum, activity) => 
     sum + (Number(activity.weight) || 0), 0
   );
   
-  const maxAllowedWeight = parseFloat((initiativeWeight * 0.65).toFixed(2));
-  const remainingWeight = parseFloat((maxAllowedWeight - totalActivitiesWeight).toFixed(2));
-  const isWeightValid = totalActivitiesWeight <= maxAllowedWeight;
+  // Expected weight is 65% of initiative weight
+  const expectedActivitiesWeight = parseFloat((initiativeWeight * 0.65).toFixed(2));
+  const remainingWeight = parseFloat((expectedActivitiesWeight - totalActivitiesWeight).toFixed(2));
+  
+  // Check if weight is valid (within 0.01% tolerance)
+  const isWeightValid = totalActivitiesWeight <= expectedActivitiesWeight;
 
-  // Render costing tool based on activity type
-  const renderCostingTool = () => {
-    const costingProps = {
-      onCalculate: handleCostingCalculation,
-      onCancel: () => setShowCostingModal(false),
-      initialData: selectedSubActivity
-    };
-
-    switch (selectedActivityType) {
-      case 'Training':
-        return <TrainingCostingTool {...costingProps} />;
-      case 'Meeting':
-      case 'Workshop':
-        return <MeetingWorkshopCostingTool {...costingProps} />;
-      case 'Printing':
-        return <PrintingCostingTool {...costingProps} />;
-      case 'Procurement':
-        return <ProcurementCostingTool {...costingProps} />;
-      case 'Supervision':
-        return <SupervisionCostingTool {...costingProps} />;
-      default:
-        return null;
-    }
-  };
+  console.log('MainActivityList: Weight calculations:', {
+    initiativeWeight,
+    expectedActivitiesWeight,
+    totalActivitiesWeight,
+    remainingWeight,
+    isWeightValid,
+    activitiesCount: filteredActivities.length
+  });
 
   // Loading state
-  if (isLoading) {
+  if (isLoading && initiativeId) {
     return (
-      <div className="flex items-center justify-center p-4">
-        <Loader className="h-5 w-5 animate-spin mr-2" />
-        <span>{t('common.loading')}</span>
+      <div className="flex items-center justify-center p-8">
+        <Loader className="h-6 w-6 animate-spin mr-2 text-blue-600" />
+        <div>
+          <span className="text-gray-600">Loading main activities...</span>
+          <p className="text-xs text-gray-500 mt-1">Initiative: {initiativeId}</p>
+        </div>
       </div>
     );
   }
 
-  // Error state
-  if (error) {
-    return (
-      <div className="text-center p-8 text-red-500 bg-red-50 rounded-lg border border-red-200">
-        <AlertCircle className="h-12 w-12 mx-auto text-red-400 mb-4" />
-        <p className="text-lg mb-2">Error loading activities</p>
-        <p className="text-sm">Failed to load main activities. Please try again.</p>
-        <button
-          onClick={handleManualRefresh}
-          className="mt-4 px-4 py-2 bg-red-100 text-red-700 rounded-md hover:bg-red-200"
-        >
-          Try Again
-        </button>
-      </div>
-    );
-  }
-
-  // Empty state
-  if (displayActivities.length === 0) {
+  // Error state with retry option
+  if (fetchError) {
     return (
       <div className="space-y-4">
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+          <div className="flex items-center mb-2">
+            <AlertCircle className="h-5 w-5 text-red-600 mr-2" />
+            <span className="text-red-800 font-medium">Failed to Load Main Activities</span>
+          </div>
+          <p className="text-red-700 text-sm mb-3">
+            {fetchError.message || 'Unable to fetch main activities from the server'}
+          </p>
+          <div className="flex space-x-2">
+            <button
+              onClick={handleManualRefresh}
+              disabled={isManualRefreshing}
+              className="px-3 py-1 text-sm bg-red-100 text-red-700 rounded hover:bg-red-200 disabled:opacity-50"
+            >
+              {isManualRefreshing ? (
+                <>
+                  <Loader className="h-4 w-4 inline mr-1 animate-spin" />
+                  Retrying...
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="h-4 w-4 inline mr-1" />
+                  Try Again
+                </>
+              )}
+            </button>
+            {isUserPlanner && (
+              <button 
+                onClick={() => onEditActivity({} as MainActivity)}
+                className="px-3 py-1 text-sm bg-blue-100 text-blue-700 rounded hover:bg-blue-200"
+              >
+                <PlusCircle className="h-4 w-4 inline mr-1" />
+                Create Activity
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Empty state when no activities exist
+  if (!filteredActivities || filteredActivities.length === 0) {
+    return (
+      <div className="space-y-4">
+        {/* Weight Distribution Card */}
         <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-medium text-gray-900">
-              Activity Weight Distribution (65% Rule)
+              Main Activities Weight Distribution
             </h3>
-            <div className="flex items-center space-x-2">
-              <Activity className="h-5 w-5 text-gray-400" />
-              <span className="text-xs text-gray-500">
-                (Raw: {safeActivitiesData.length}, Filtered: {displayActivities.length})
-              </span>
-              <button
-                onClick={handleManualRefresh}
-                disabled={isLoading}
-                className="text-sm text-blue-600 hover:text-blue-800 flex items-center"
-                title="Refresh activities"
-              >
-                <Loader className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
-              </button>
-            </div>
+            <BarChart3 className="h-5 w-5 text-gray-400" />
           </div>
           
           <div className="grid grid-cols-3 gap-4 text-center">
@@ -580,83 +366,84 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
               <p className="text-2xl font-semibold text-gray-900">{initiativeWeight}%</p>
             </div>
             <div>
-              <p className="text-sm text-gray-500">Max Allowed (65%)</p>
-              <p className="text-2xl font-semibold text-blue-600">{maxAllowedWeight}%</p>
+              <p className="text-sm text-gray-500">Expected (65%)</p>
+              <p className="text-2xl font-semibold text-blue-600">{expectedActivitiesWeight}%</p>
             </div>
             <div>
               <p className="text-sm text-gray-500">Available</p>
-              <p className="text-2xl font-semibold text-green-600">{maxAllowedWeight}%</p>
+              <p className="text-2xl font-semibold text-green-600">{expectedActivitiesWeight}%</p>
             </div>
           </div>
 
           <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-md">
             <p className="text-sm text-blue-700 flex items-center">
               <Info className="h-4 w-4 mr-2" />
-              <strong>65% Rule:</strong> Total main activities weight must not exceed {maxAllowedWeight}% 
-              (65% of initiative weight {initiativeWeight}%).
+              <strong>Rule:</strong> Main activities can use up to 65% of initiative weight ({expectedActivitiesWeight}%). 
+              Remaining 35% is reserved for performance measures.
             </p>
           </div>
         </div>
 
+        {/* Empty State */}
         <div className="text-center p-8 bg-white rounded-lg border-2 border-dashed border-gray-200">
-          <Activity className="h-12 w-12 mx-auto text-gray-400 mb-4" />
           <h3 className="text-lg font-medium text-gray-900 mb-2">No Main Activities Found</h3>
           <p className="text-gray-500 mb-4">
-            {safeActivitiesData.length === 0 
-              ? "No main activities have been created yet for this initiative."
-              : `Found ${safeActivitiesData.length} activities from API, but none match your organization (${userOrgId}).`
-            }
+            No main activities have been created yet for this initiative.
           </p>
           <div className="flex justify-center space-x-3">
             <button
               onClick={handleManualRefresh}
-              disabled={isLoading}
-              className="px-4 py-2 bg-blue-100 text-blue-700 rounded-md hover:bg-blue-200 flex items-center"
+              disabled={isManualRefreshing}
+              className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
             >
-              <Loader className={`h-4 w-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
-              {isLoading ? 'Loading...' : 'Check Again'}
+              {isManualRefreshing ? (
+                <>
+                  <Loader className="h-4 w-4 mr-2 animate-spin" />
+                  Checking...
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  Check Again
+                </>
+              )}
             </button>
             {isUserPlanner && (
               <button 
                 onClick={() => onEditActivity({} as MainActivity)}
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700"
+                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700"
               >
                 <PlusCircle className="h-4 w-4 mr-2" />
-                Create First Main Activity
+                Create Main Activity
               </button>
             )}
-          </div>
-          
-          {/* Debug info for production troubleshooting */}
-          <div className="mt-4 p-3 bg-gray-100 rounded text-xs text-gray-600">
-            <p>Debug: Initiative ID: {initiativeId}</p>
-            <p>User Org ID: {userOrgId || 'Not set'}</p>
-            <p>Raw Activities: {safeActivitiesData.length}</p>
-            <p>After Filtering: {displayActivities.length}</p>
           </div>
         </div>
       </div>
     );
   }
 
+  // Main render with activities
   return (
     <div className="space-y-4">
-      {/* Weight Distribution Card */}
+      {/* Weight Distribution Summary */}
       <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-medium text-gray-900">
-            Activity Weight Distribution (65% Rule)
+            Main Activities Weight Distribution
           </h3>
           <div className="flex items-center space-x-2">
-            <Activity className="h-5 w-5 text-gray-400" />
-            <span className="text-xs text-gray-500">({displayActivities.length} activities)</span>
+            <BarChart3 className="h-5 w-5 text-gray-400" />
             <button
               onClick={handleManualRefresh}
-              disabled={isLoading}
-              className="text-sm text-blue-600 hover:text-blue-800 flex items-center"
-              title="Refresh activities"
+              disabled={isManualRefreshing}
+              className="p-1 text-gray-400 hover:text-gray-600 disabled:opacity-50"
             >
-              <Loader className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
+              {isManualRefreshing ? (
+                <Loader className="h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4" />
+              )}
             </button>
           </div>
         </div>
@@ -668,7 +455,7 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
           </div>
           <div>
             <p className="text-sm text-gray-500">Current Total</p>
-            <p className="text-2xl font-semibold text-orange-600">{totalActivitiesWeight.toFixed(1)}%</p>
+            <p className="text-2xl font-semibold text-blue-600">{totalActivitiesWeight.toFixed(1)}%</p>
           </div>
           <div>
             <p className="text-sm text-gray-500">Remaining</p>
@@ -681,255 +468,148 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
         <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-md">
           <p className="text-sm text-blue-700 flex items-center">
             <Info className="h-4 w-4 mr-2" />
-            <strong>65% Rule:</strong> Total activities weight must not exceed {maxAllowedWeight}% 
-            (65% of initiative weight {initiativeWeight}%). Currently showing {displayActivities.length} activities.
+            <strong>Target:</strong> Activities can use up to {expectedActivitiesWeight}% 
+            (65% of initiative weight {initiativeWeight}%).
           </p>
         </div>
 
-        {!isWeightValid && (
+        {remainingWeight < 0 && (
           <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-md flex items-center gap-2 text-red-700">
             <AlertCircle className="h-5 w-5" />
-            <p className="text-sm">Activities weight exceeds maximum allowed by {Math.abs(remainingWeight).toFixed(1)}%</p>
+            <p className="text-sm">Over target by {Math.abs(remainingWeight).toFixed(1)}%. Please reduce existing activity weights.</p>
           </div>
         )}
 
-        {/* Validation Messages */}
-        {validationSuccess && (
+        {isWeightValid && totalActivitiesWeight > 0 && (
           <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded-md flex items-center gap-2 text-green-700">
             <CheckCircle className="h-5 w-5" />
-            <p className="text-sm">{validationSuccess}</p>
-          </div>
-        )}
-
-        {validationError && (
-          <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-md flex items-center gap-2 text-red-700">
-            <AlertCircle className="h-5 w-5" />
-            <p className="text-sm">{validationError}</p>
-          </div>
-        )}
-
-        {isUserPlanner && displayActivities.length > 0 && (
-          <div className="mt-4">
-            <button
-              onClick={handleValidateActivities}
-              disabled={isLoading}
-              className="w-full py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-orange-600 hover:bg-orange-700"
-            >
-              Validate Activities Weight ({totalActivitiesWeight.toFixed(1)}% / {maxAllowedWeight}%)
-            </button>
+            <p className="text-sm">Weight distribution is within limits ({totalActivitiesWeight.toFixed(1)}% ≤ {expectedActivitiesWeight}%)</p>
           </div>
         )}
       </div>
 
-      {/* Main Activities List */}
-      <div className="space-y-3" key={`activities-${refreshKey}-${displayActivities.length}`}>
-        <h3 className="text-sm font-medium text-gray-700 flex items-center">
-          <span className="inline-flex items-center px-2.5 py-0.5 mr-2 rounded-full text-xs font-medium bg-orange-100 text-orange-800">
-            Activities ({displayActivities.length})
-          </span>
-          Main Activities
-          {isLoading && (
-            <Loader className="h-4 w-4 ml-2 animate-spin text-blue-500" />
+      {/* Activities List */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-medium text-gray-700 flex items-center">
+            <span className="inline-flex items-center px-2.5 py-0.5 mr-2 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+              Activities ({filteredActivities.length})
+            </span>
+            Main Activities
+          </h3>
+          {isUserPlanner && (
+            <button 
+              onClick={() => onEditActivity({} as MainActivity)}
+              disabled={remainingWeight <= 0}
+              className="inline-flex items-center px-3 py-1 text-xs font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <PlusCircle className="h-4 w-4 mr-1" />
+              Add Activity
+            </button>
           )}
-        </h3>
+        </div>
         
-        {displayActivities.map((activity) => {
-          const subActivitiesList = activity.sub_activities || [];
-          
-          // Calculate budget summary from sub-activities
-          const totalBudget = subActivitiesList.reduce((sum, sub) => {
-            const cost = sub.budget_calculation_type === 'WITH_TOOL' 
+        {filteredActivities.map((activity) => {
+          // Calculate budget totals for display
+          const totalBudget = activity.sub_activities?.reduce((sum, sub) => {
+            const cost = sub.budget_calculation_type === 'WITH_TOOL'
               ? Number(sub.estimated_cost_with_tool || 0)
               : Number(sub.estimated_cost_without_tool || 0);
             return sum + cost;
-          }, 0);
-          
-          const totalFunding = subActivitiesList.reduce((sum, sub) => {
-            return sum + Number(sub.government_treasury || 0) + 
-                       Number(sub.sdg_funding || 0) + 
-                       Number(sub.partners_funding || 0) + 
-                       Number(sub.other_funding || 0);
-          }, 0);
-          
+          }, 0) || 0;
+
+          const totalFunding = activity.sub_activities?.reduce((sum, sub) => {
+            return sum + 
+              Number(sub.government_treasury || 0) +
+              Number(sub.sdg_funding || 0) +
+              Number(sub.partners_funding || 0) +
+              Number(sub.other_funding || 0);
+          }, 0) || 0;
+
           const fundingGap = Math.max(0, totalBudget - totalFunding);
 
           return (
             <div
               key={activity.id}
-              className="bg-white p-4 rounded-lg shadow-sm border border-gray-200"
+              onClick={() => onSelectActivity && onSelectActivity(activity)}
+              className="bg-white p-4 rounded-lg shadow-sm border border-gray-200 hover:border-blue-300 transition-colors cursor-pointer"
             >
-              {/* Main Activity Header */}
-              <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center">
-                  <Activity className="h-5 w-5 text-orange-600 mr-2" />
-                  <div>
-                    <h4 className="font-medium text-gray-900">{activity.name}</h4>
-                    <div className="flex items-center mt-1 space-x-3">
-                      <span className="text-sm font-medium text-orange-600">{activity.weight}%</span>
-                      {activity.organization_name && (
-                        <div className="flex items-center text-sm text-gray-600">
-                          <Building2 className="h-3 w-3 mr-1" />
-                          <span>{activity.organization_name}</span>
-                        </div>
-                      )}
-                    </div>
+                  <h4 className="font-medium text-gray-900">{activity.name}</h4>
+                  {activity.organization_name && (
+                    <span className="ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                      {activity.organization_name}
+                    </span>
+                  )}
+                  {activity.sub_activities && activity.sub_activities.length > 0 && (
+                    <span className="ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                      {activity.sub_activities.length} Sub-Activities
+                    </span>
+                  )}
+                </div>
+                <div className="flex flex-col items-end">
+                  <span className="text-sm font-medium text-blue-600">
+                    {activity.weight}%
+                  </span>
+                </div>
+              </div>
+              
+              {/* Activity Targets */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-2 text-xs text-gray-500">
+                <div>Baseline: {activity.baseline || 'N/A'}</div>
+                <div>Annual Target: {activity.annual_target || 0}</div>
+                <div>Q1: {activity.q1_target || 0}</div>
+                <div>Q2: {activity.q2_target || 0}</div>
+                <div>Q3: {activity.q3_target || 0}</div>
+                <div>Q4: {activity.q4_target || 0}</div>
+              </div>
+
+              {/* Budget Summary */}
+              {totalBudget > 0 && (
+                <div className="mt-3 p-2 bg-gray-50 rounded border text-xs">
+                  <div className="flex justify-between items-center">
+                    <span className="flex items-center text-gray-600">
+                      <DollarSign className="h-3 w-3 mr-1" />
+                      Budget: ETB {totalBudget.toLocaleString()}
+                    </span>
+                    <span className={`font-medium ${fundingGap > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                      {fundingGap > 0 ? `Gap: ETB ${fundingGap.toLocaleString()}` : 'Fully Funded'}
+                    </span>
                   </div>
                 </div>
-                
-                {/* Main Activity Edit/Delete Buttons - OUTSIDE sub-activity container */}
-                {isUserPlanner && (
+              )}
+              
+              <div className="flex justify-end mt-2">
+                {isUserPlanner ? (
                   <div className="flex space-x-2">
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
                         onEditActivity(activity);
                       }}
-                      className="text-sm text-blue-600 hover:text-blue-800 flex items-center px-2 py-1 border border-blue-200 rounded"
+                      className="text-xs text-blue-600 hover:text-blue-800 flex items-center"
                     >
                       <Edit className="h-4 w-4 mr-1" />
-                      Edit Activity
+                      Edit
                     </button>
                     <button
                       onClick={(e) => handleDeleteActivity(activity.id, e)}
                       disabled={deleteActivityMutation.isPending}
-                      className="text-sm text-red-600 hover:text-red-800 flex items-center px-2 py-1 border border-red-200 rounded disabled:opacity-50"
+                      className="text-xs text-red-600 hover:text-red-800 flex items-center disabled:opacity-50"
                     >
                       {deleteActivityMutation.isPending ? (
                         <Loader className="h-4 w-4 mr-1 animate-spin" />
                       ) : (
                         <Trash2 className="h-4 w-4 mr-1" />
                       )}
-                      Delete Activity
+                      {deleteActivityMutation.isPending ? 'Deleting...' : 'Delete'}
                     </button>
-                  </div>
-                )}
-              </div>
-
-              {/* Activity Details */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3 text-xs text-gray-500">
-                <div>Baseline: {activity.baseline || 'N/A'}</div>
-                <div>Annual: {activity.annual_target || 0}</div>
-                <div>Q1: {activity.q1_target || 0}</div>
-                <div>Q2: {activity.q2_target || 0}</div>
-                <div>Q3: {activity.q3_target || 0}</div>
-                <div>Q4: {activity.q4_target || 0}</div>
-                <div>Type: {activity.target_type || 'cumulative'}</div>
-                <div>Sub-activities: {subActivitiesList.length}</div>
-              </div>
-
-              {/* Budget Summary */}
-              {totalBudget > 0 && (
-                <div className="mb-3 p-3 bg-gray-50 rounded border border-gray-200">
-                  <div className="flex items-center justify-between text-sm">
-                    <div className="flex items-center">
-                      <DollarSign className="h-4 w-4 text-green-600 mr-1" />
-                      <span className="text-gray-600">Total Budget:</span>
-                    </div>
-                    <div className="flex space-x-4">
-                      <span className="text-gray-700">Required: ${totalBudget.toLocaleString()}</span>
-                      <span className="text-blue-600">Available: ${totalFunding.toLocaleString()}</span>
-                      {fundingGap > 0 ? (
-                        <span className="text-red-600">Gap: ${fundingGap.toLocaleString()}</span>
-                      ) : totalBudget > 0 ? (
-                        <span className="text-green-600">Fully Funded</span>
-                      ) : null}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Sub-activities Section */}
-              <div className="border-t border-gray-200 pt-3">
-                <div className="flex items-center justify-between mb-2">
-                  <h5 className="text-sm font-medium text-gray-600">
-                    Sub-activities ({subActivitiesList.length})
-                  </h5>
-                  {isUserPlanner && (
-                    <button
-                      onClick={() => handleAddSubActivity(activity)}
-                      className="text-sm text-green-600 hover:text-green-800 flex items-center px-2 py-1 border border-green-200 rounded"
-                    >
-                      <PlusCircle className="h-4 w-4 mr-1" />
-                      Add Sub-activity
-                    </button>
-                  )}
-                </div>
-
-                {subActivitiesList.length === 0 ? (
-                  <div className="text-center p-4 bg-gray-50 rounded border-2 border-dashed border-gray-200">
-                    <p className="text-sm text-gray-500">No sub-activities created yet</p>
-                    {isUserPlanner && (
-                      <button
-                        onClick={() => handleAddSubActivity(activity)}
-                        className="mt-2 text-sm text-green-600 hover:text-green-800"
-                      >
-                        Click here to add the first sub-activity
-                      </button>
-                    )}
                   </div>
                 ) : (
-                  <div className="space-y-2">
-                    {subActivitiesList.map((subActivity) => (
-                      <div
-                        key={subActivity.id}
-                        onClick={(e) => handleViewSubActivity(activity, subActivity, e)}
-                        className="p-3 bg-white border border-gray-200 rounded hover:border-blue-300 transition-colors cursor-pointer"
-                      >
-                        <div className="flex items-center justify-between">
-                          <div className="flex-1">
-                            <div className="flex items-center justify-between">
-                              <span className="font-medium text-gray-900">{subActivity.name}</span>
-                              <div className="flex items-center space-x-2">
-                                <span className="text-xs bg-blue-100 px-2 py-0.5 rounded text-blue-800">
-                                  {subActivity.activity_type}
-                                </span>
-                                <span className="text-xs bg-gray-100 px-2 py-0.5 rounded text-gray-600">
-                                  {subActivity.budget_calculation_type === 'WITH_TOOL' ? 'Tool' : 'Manual'}
-                                </span>
-                              </div>
-                            </div>
-                            
-                            {subActivity.description && (
-                              <p className="text-xs text-gray-500 mt-1">{subActivity.description}</p>
-                            )}
-                            
-                            <div className="flex items-center justify-between mt-2">
-                              <div className="text-xs text-gray-600">
-                                Budget: ${subActivity.budget_calculation_type === 'WITH_TOOL' 
-                                  ? Number(subActivity.estimated_cost_with_tool || 0).toLocaleString()
-                                  : Number(subActivity.estimated_cost_without_tool || 0).toLocaleString()
-                                }
-                              </div>
-                              
-                              <div className="flex space-x-2">
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleViewSubActivity(activity, subActivity, e);
-                                  }}
-                                  className="text-xs text-blue-600 hover:text-blue-800 flex items-center"
-                                >
-                                  <Eye className="h-3 w-3 mr-1" />
-                                  View
-                                </button>
-                                {isUserPlanner && (
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleEditSubActivity(activity, subActivity);
-                                    }}
-                                    className="text-xs text-green-600 hover:text-green-800 flex items-center"
-                                  >
-                                    <Edit className="h-3 w-3 mr-1" />
-                                    Edit
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
+                  <div className="text-xs text-gray-500 flex items-center">
+                    <Lock className="h-3 w-3 mr-1" />
+                    Read Only
                   </div>
                 )}
               </div>
@@ -938,212 +618,25 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
         })}
       </div>
 
-      {/* Add main activity button */}
+      {/* Add activity button for planners */}
       {isUserPlanner && (
         <div className="mt-4 text-center">
           <button 
             onClick={() => onEditActivity({} as MainActivity)}
             disabled={remainingWeight <= 0}
-            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <PlusCircle className="h-4 w-4 mr-2" />
-            {displayActivities.length === 0 ? 'Create First Main Activity' : 
+            {filteredActivities.length === 0 ? 'Create First Main Activity' : 
              remainingWeight <= 0 ? `No Weight Available (${remainingWeight.toFixed(1)}%)` :
              'Create New Main Activity'}
           </button>
-        </div>
-      )}
-
-      {/* Activity Type Selection Modal */}
-      {showActivityTypeModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl">
-            <div className="p-6">
-              <div className="flex items-center justify-between mb-6">
-                <h3 className="text-lg font-medium text-gray-900">
-                  Select Activity Type - {selectedActivity?.name}
-                </h3>
-                <button
-                  onClick={closeAllModals}
-                  className="text-gray-400 hover:text-gray-500"
-                >
-                  <X className="h-6 w-6" />
-                </button>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                {ACTIVITY_TYPES.map((type) => (
-                  <button
-                    key={type.value}
-                    onClick={() => handleActivityTypeSelect(type.value)}
-                    className="p-4 text-left border border-gray-200 rounded-lg hover:border-blue-500 hover:bg-blue-50 transition-colors"
-                  >
-                    <div className="flex items-center mb-2">
-                      <span className="text-2xl mr-3">{type.icon}</span>
-                      <h4 className="font-medium text-gray-900">{type.label}</h4>
-                    </div>
-                    <p className="text-sm text-gray-500">{type.description}</p>
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Costing Tool Modal */}
-      {showCostingModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-6xl max-h-[90vh] overflow-hidden">
-            <div className="p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium text-gray-900 flex items-center">
-                  <Calculator className="h-5 w-5 mr-2 text-blue-600" />
-                  {selectedActivityType} Cost Calculator - {selectedActivity?.name}
-                </h3>
-                <button
-                  onClick={closeAllModals}
-                  className="text-gray-400 hover:text-gray-500"
-                >
-                  <X className="h-6 w-6" />
-                </button>
-              </div>
-              
-              {renderCostingTool()}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Budget Form Modal */}
-      {showBudgetModal && selectedActivity && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] overflow-hidden">
-            <div className="p-6">
-              <h3 className="text-lg font-medium text-gray-900 mb-4">
-                {selectedSubActivity ? 'Edit' : 'Add'} Sub-Activity Budget - {selectedActivity.name}
-              </h3>
-              
-              <ActivityBudgetForm
-                activity={selectedActivity}
-                budgetCalculationType={costingToolData ? 'WITH_TOOL' : 'WITHOUT_TOOL'}
-                activityType={selectedActivityType || null}
-                onSubmit={handleBudgetSubmit}
-                initialData={selectedSubActivity}
-                costingToolData={costingToolData}
-                onCancel={closeAllModals}
-                isSubmitting={createSubActivityMutation.isPending || updateSubActivityMutation.isPending}
-              />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* View Sub-Activity Modal */}
-      {showViewModal && selectedSubActivity && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl">
-            <div className="p-6">
-              <div className="flex items-center justify-between mb-6">
-                <h3 className="text-lg font-medium text-gray-900">
-                  Sub-Activity Details - {selectedSubActivity.name}
-                </h3>
-                <button
-                  onClick={closeAllModals}
-                  className="text-gray-400 hover:text-gray-500"
-                >
-                  <X className="h-6 w-6" />
-                </button>
-              </div>
-
-              <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-sm font-medium text-gray-700">Activity Type</label>
-                    <p className="text-gray-900">{selectedSubActivity.activity_type}</p>
-                  </div>
-                  <div>
-                    <label className="text-sm font-medium text-gray-700">Calculation Method</label>
-                    <p className="text-gray-900">
-                      {selectedSubActivity.budget_calculation_type === 'WITH_TOOL' ? 'Using Costing Tool' : 'Manual Entry'}
-                    </p>
-                  </div>
-                </div>
-
-                {selectedSubActivity.description && (
-                  <div>
-                    <label className="text-sm font-medium text-gray-700">Description</label>
-                    <p className="text-gray-900">{selectedSubActivity.description}</p>
-                  </div>
-                )}
-
-                <div className="border-t border-gray-200 pt-4">
-                  <h4 className="text-md font-medium text-gray-900 mb-3">Budget Information</h4>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="text-sm font-medium text-gray-700">Estimated Cost</label>
-                      <p className="text-lg font-semibold text-green-600">
-                        ${selectedSubActivity.budget_calculation_type === 'WITH_TOOL' 
-                          ? Number(selectedSubActivity.estimated_cost_with_tool || 0).toLocaleString()
-                          : Number(selectedSubActivity.estimated_cost_without_tool || 0).toLocaleString()
-                        }
-                      </p>
-                    </div>
-                    <div>
-                      <label className="text-sm font-medium text-gray-700">Total Funding</label>
-                      <p className="text-lg font-semibold text-blue-600">
-                        ${(
-                          Number(selectedSubActivity.government_treasury || 0) +
-                          Number(selectedSubActivity.sdg_funding || 0) +
-                          Number(selectedSubActivity.partners_funding || 0) +
-                          Number(selectedSubActivity.other_funding || 0)
-                        ).toLocaleString()}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="mt-4 space-y-2 text-sm">
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Government Treasury:</span>
-                      <span>${Number(selectedSubActivity.government_treasury || 0).toLocaleString()}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">SDG Funding:</span>
-                      <span>${Number(selectedSubActivity.sdg_funding || 0).toLocaleString()}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Partners Funding:</span>
-                      <span>${Number(selectedSubActivity.partners_funding || 0).toLocaleString()}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Other Funding:</span>
-                      <span>${Number(selectedSubActivity.other_funding || 0).toLocaleString()}</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex justify-end space-x-3">
-                  <button
-                    onClick={closeAllModals}
-                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
-                  >
-                    Close
-                  </button>
-                  {isUserPlanner && (
-                    <button
-                      onClick={() => {
-                        setShowViewModal(false);
-                        handleEditSubActivity(selectedActivity!, selectedSubActivity);
-                      }}
-                      className="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md hover:bg-blue-700"
-                    >
-                      Edit Sub-Activity
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
+          
+          {remainingWeight <= 0 && (
+            <p className="mt-2 text-xs text-amber-600">
+              Cannot add more activities. Total weight cannot exceed {expectedActivitiesWeight}% (65% of initiative).
+            </p>
+          )}
         </div>
       )}
     </div>
