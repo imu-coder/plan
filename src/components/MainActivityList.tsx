@@ -47,7 +47,6 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
   const [userOrgId, setUserOrgId] = useState<number | null>(null);
   const [validationSuccess, setValidationSuccess] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
-  const [activitiesCount, setActivitiesCount] = useState(0);
   
   // Modal states
   const [selectedActivity, setSelectedActivity] = useState<MainActivity | null>(null);
@@ -68,6 +67,8 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
         
         if (authData.userOrganizations && authData.userOrganizations.length > 0) {
           setUserOrgId(authData.userOrganizations[0].organization);
+          console.log('MainActivityList: User org ID set to:', authData.userOrganizations[0].organization);
+          console.log('MainActivityList: User org ID set to:', authData.userOrganizations[0].organization);
         }
       } catch (error) {
         console.error('Failed to fetch user data:', error);
@@ -77,136 +78,171 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
     fetchUserData();
   }, []);
 
-  // Fetch main activities with proper caching and refresh
+  // PRODUCTION-STABLE: Fetch main activities with robust error handling
   const { data: activitiesList, isLoading, error, refetch } = useQuery({
-    queryKey: ['main-activities', initiativeId, refreshKey],
+    queryKey: ['main-activities', initiativeId, userOrgId, refreshKey],
     queryFn: async () => {
       if (!initiativeId) {
-        console.log('No initiativeId provided, returning empty data');
+        console.log('MainActivityList: No initiativeId provided');
         return { data: [] };
       }
       
-      console.log(`Fetching main activities for initiative ${initiativeId}`);
+      console.log(`MainActivityList: Fetching activities for initiative ${initiativeId}, userOrg: ${userOrgId}`);
       try {
         const response = await mainActivities.getByInitiative(initiativeId);
-        const activities = response?.data || [];
-        console.log(`Successfully fetched ${activities.length} main activities`);
+        console.log('MainActivityList: Raw API response:', response);
+        if (!response || !response.data) {
+          console.log('MainActivityList: No data in response');
+          return { data: [] };
+        }
         
-        // Update activities count for immediate display detection
-        setActivitiesCount(activities.length);
+        const activities = Array.isArray(response.data) ? response.data : [];
+        console.log(`MainActivityList: Successfully fetched ${activities.length} activities from API`);
+        
+        // Log each activity for debugging
+        activities.forEach((activity, index) => {
+        if (!response) {
+          console.log('MainActivityList: No response from API');
+          return { data: [] };
+        }
+        
+        const activities = Array.isArray(response.data) ? response.data : [];
+        console.log(`MainActivityList: Processed ${activities.length} activities from response`);
+        
+        // Log each activity for production debugging
+        activities.forEach((activity, index) => {
+          console.log(`Activity ${index + 1}: "${activity.name}" (ID: ${activity.id}, Org: ${activity.organization || 'none'})`);
+        });
         
         return response;
       } catch (error) {
-        console.error('Error fetching main activities:', error);
+        console.error('MainActivityList: API Error:', error);
         throw error;
       }
     },
-    enabled: !!initiativeId,
-    staleTime: 0, // No cache to ensure fresh data
-    cacheTime: 0, // No cache time to force fresh fetch
-    refetchOnMount: true,
+    enabled: !!initiativeId && userOrgId !== null,
+    staleTime: 30000, // 30 seconds cache for production stability
     refetchOnWindowFocus: false,
-    retry: 2,
-    refetchInterval: false
+    retry: 1,
+    retry: 1,
+    refetchInterval: false,
+    refetchOnReconnect: true
   });
 
-  // Force refetch when external changes occur
+  // PRODUCTION FIX: Refetch when initiative changes
   useEffect(() => {
-    if (refreshKey > 0) {
-      console.log('External refresh triggered, refetching activities');
+    if (initiativeId && userOrgId !== null) {
+      console.log('MainActivityList: Initiative or user org changed, refetching');
       refetch();
     }
-  }, [refreshKey, refetch]);
+  }, [initiativeId, userOrgId, refetch]);
 
   // Create sub-activity mutation with immediate cache update
   const createSubActivityMutation = useMutation({
     mutationFn: (subActivityData: any) => subActivities.create(subActivityData),
-    onSuccess: () => {
+    onSuccess: (result) => {
       console.log('Sub-activity created successfully, updating cache');
-      // Invalidate and refetch the main activities
-      queryClient.invalidateQueries({ queryKey: ['main-activities', initiativeId] });
-      // Force immediate refetch
-      refetch();
+      // Force immediate refetch without cache invalidation to prevent disappearing
+      setTimeout(() => {
+        refetch();
+      }, 100);
       closeAllModals();
     },
     onError: (error) => {
       console.error('Failed to create sub-activity:', error);
-      // Refetch to ensure we have the latest data
-      refetch();
     }
   });
 
   // Update sub-activity mutation with immediate cache update
   const updateSubActivityMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: any }) => subActivities.update(id, data),
-    onSuccess: () => {
-      console.log('Sub-activity updated successfully, updating cache');
-      queryClient.invalidateQueries({ queryKey: ['main-activities', initiativeId] });
-      refetch();
+    onSuccess: (result) => {
+      setTimeout(() => {
+        console.log('MainActivityList: Refreshing after sub-activity update');
+        refetch();
+      }, 200);
+        refetch();
+      }, 100);
       closeAllModals();
     },
-    onError: (error) => {
       console.error('Failed to update sub-activity:', error);
-      refetch();
     }
   });
 
   // Delete activity mutation with immediate cache update
   const deleteActivityMutation = useMutation({
-    mutationFn: (activityId: string) => mainActivities.delete(activityId),
-    onSuccess: () => {
-      console.log('Activity deleted successfully, updating cache');
-      queryClient.invalidateQueries({ queryKey: ['main-activities', initiativeId] });
-      refetch();
+    onSuccess: (result) => {
+      // PRODUCTION FIX: Gentle refresh without invalidating cache
+      setTimeout(() => {
+        console.log('MainActivityList: Refreshing after sub-activity creation');
+        refetch();
+      }, 200);
     },
-    onError: (error) => {
-      console.error('Failed to delete activity:', error);
-      refetch();
     }
   });
 
   // Manual refresh function
   const handleManualRefresh = () => {
-    console.log('Manual refresh triggered');
-    refetch();
+    console.log('MainActivityList: Manual refresh triggered');
+    onSuccess: (result) => {
   };
 
-  // Safe data access with detailed logging
+  // PRODUCTION-SAFE: Comprehensive data validation and logging
   const activitiesData = activitiesList?.data;
-  console.log('MainActivityList render - Raw data:', {
-    activitiesList: activitiesList ? 'exists' : 'null',
-    activitiesData: activitiesData ? `${Array.isArray(activitiesData) ? activitiesData.length : 'not array'} items` : 'null',
+  console.log('MainActivityList: Current render state:', {
+    hasActivitiesList: !!activitiesList,
+    dataType: activitiesData ? (Array.isArray(activitiesData) ? 'array' : typeof activitiesData) : 'none',
+    dataLength: Array.isArray(activitiesData) ? activitiesData.length : 0,
     userOrgId,
-    initiativeId
+    initiativeId,
+    isLoading,
+    isLoading,
+    hasError: !!error
   });
 
-  // Ensure we have valid array data
+  // CRITICAL: Ensure we always have valid array data
   const safeActivitiesData = Array.isArray(activitiesData) ? activitiesData : [];
+  console.log('MainActivityList: Safe data length:', safeActivitiesData.length);
+  console.log('MainActivityList: Safe activities data length:', safeActivitiesData.length);
 
-  // Filter activities based on user organization with detailed logging
-  const filteredActivities = safeActivitiesData.filter(activity => {
+  // PRODUCTION-OPTIMIZED: Very permissive filtering for maximum compatibility
+  const displayActivities = safeActivitiesData.filter(activity => {
     if (!activity) {
-      console.log('Skipping null/undefined activity');
+      console.log('MainActivityList: Skipping null activity');
       return false;
     }
     
-    // More permissive filtering: show activities with no organization OR user's organization
-    const hasNoOrganization = !activity.organization;
-    const belongsToUserOrg = activity.organization && Number(activity.organization) === Number(userOrgId);
-    const shouldInclude = hasNoOrganization || belongsToUserOrg;
+    // PRODUCTION FIX: Ultra-permissive filtering
+    const hasNoOrganization = !activity.organization || 
+                             activity.organization === null || 
+                             activity.organization === '' ||
+                             activity.organization === 'null';
     
-    console.log(`Activity "${activity.name}": organization=${activity.organization}, userOrg=${userOrgId}, hasNoOrg=${hasNoOrganization}, belongsToUserOrg=${belongsToUserOrg}, shouldInclude=${shouldInclude}`);
+    const belongsToUserOrg = userOrgId && activity.organization && 
+                            (String(activity.organization) === String(userOrgId) ||
+                             Number(activity.organization) === Number(userOrgId));
+    
+    const isDefaultActivity = activity.is_default === true;
+    
+    // Show if: no org, belongs to user, or is default
+    const shouldInclude = hasNoOrganization || belongsToUserOrg || isDefaultActivity;
+    const isDefault = activity.is_default === true;
+    
+    // Show activity if: no org specified, belongs to user org, or is default
+    const shouldInclude = hasNoOrganization || belongsToUserOrg || isDefault;
+    
+    console.log(`MainActivityList: "${activity.name}" - org:${activity.organization}, userOrg:${userOrgId}, noOrg:${hasNoOrganization}, belongsToUser:${belongsToUserOrg}, isDefault:${isDefaultActivity}, include:${shouldInclude}`);
     
     return shouldInclude;
   });
 
-  console.log(`MainActivityList: Showing ${filteredActivities.length} of ${safeActivitiesData.length} activities for user org ${userOrgId}`, {
+  console.log(`MainActivityList: FINAL RESULT - displaying ${displayActivities.length} of ${safeActivitiesData.length} activities`, {
     initiativeId,
-    isLoading,
-    error: error ? 'yes' : 'no',
-    rawDataLength: safeActivitiesData.length,
-    filteredLength: filteredActivities.length
-  });
+    userOrgId,
+    userOrgId,
+    totalFromAPI: safeActivitiesData.length,
+    afterFiltering: displayActivities.length,
+    isLoading
 
   // Close all modals
   const closeAllModals = () => {
@@ -357,7 +393,7 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
   };
 
   // Calculate weight totals
-  const totalActivitiesWeight = filteredActivities.reduce((sum, activity) => 
+  const totalActivitiesWeight = displayActivities.reduce((sum, activity) => 
     sum + (Number(activity.weight) || 0), 0
   );
   
@@ -418,7 +454,7 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
   }
 
   // Empty state
-  if (filteredActivities.length === 0) {
+  if (displayActivities.length === 0) {
     return (
       <div className="space-y-4">
         <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
@@ -428,12 +464,16 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
             </h3>
             <div className="flex items-center space-x-2">
               <Activity className="h-5 w-5 text-gray-400" />
+              <span className="text-xs text-gray-500">
+                (Raw: {safeActivitiesData.length}, Filtered: {displayActivities.length})
+              </span>
               <button
                 onClick={handleManualRefresh}
+                disabled={isLoading}
                 className="text-sm text-blue-600 hover:text-blue-800 flex items-center"
                 title="Refresh activities"
               >
-                <Loader className="h-4 w-4" />
+                <Loader className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
               </button>
             </div>
           </div>
@@ -466,15 +506,19 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
           <Activity className="h-12 w-12 mx-auto text-gray-400 mb-4" />
           <h3 className="text-lg font-medium text-gray-900 mb-2">No Main Activities Found</h3>
           <p className="text-gray-500 mb-4">
-            No main activities have been created yet for this initiative.
+            {safeActivitiesData.length === 0 
+              ? "No main activities have been created yet for this initiative."
+              : `Found ${safeActivitiesData.length} activities from API, but none match your organization (${userOrgId}).`
+            }
           </p>
           <div className="flex justify-center space-x-3">
             <button
               onClick={handleManualRefresh}
+              disabled={isLoading}
               className="px-4 py-2 bg-blue-100 text-blue-700 rounded-md hover:bg-blue-200 flex items-center"
             >
-              <Loader className="h-4 w-4 mr-2" />
-              Check Again
+              <Loader className={`h-4 w-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
+              {isLoading ? 'Loading...' : 'Check Again'}
             </button>
             {isUserPlanner && (
               <button 
@@ -485,6 +529,14 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
                 Create First Main Activity
               </button>
             )}
+          </div>
+          
+          {/* Debug info for production troubleshooting */}
+          <div className="mt-4 p-3 bg-gray-100 rounded text-xs text-gray-600">
+            <p>Debug: Initiative ID: {initiativeId}</p>
+            <p>User Org ID: {userOrgId || 'Not set'}</p>
+            <p>Raw Activities: {safeActivitiesData.length}</p>
+            <p>After Filtering: {displayActivities.length}</p>
           </div>
         </div>
       </div>
@@ -501,14 +553,14 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
           </h3>
           <div className="flex items-center space-x-2">
             <Activity className="h-5 w-5 text-gray-400" />
-            <span className="text-xs text-gray-500">({filteredActivities.length} activities)</span>
+            <span className="text-xs text-gray-500">({displayActivities.length} activities)</span>
             <button
               onClick={handleManualRefresh}
-              disabled={isLoading || isFetching}
+              disabled={isLoading}
               className="text-sm text-blue-600 hover:text-blue-800 flex items-center"
               title="Refresh activities"
             >
-              <Loader className={`h-4 w-4 ${isLoading || isFetching ? 'animate-spin' : ''}`} />
+              <Loader className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
             </button>
           </div>
         </div>
@@ -534,7 +586,7 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
           <p className="text-sm text-blue-700 flex items-center">
             <Info className="h-4 w-4 mr-2" />
             <strong>65% Rule:</strong> Total activities weight must not exceed {maxAllowedWeight}% 
-            (65% of initiative weight {initiativeWeight}%). Currently showing {filteredActivities.length} activities.
+            (65% of initiative weight {initiativeWeight}%). Currently showing {displayActivities.length} activities.
           </p>
         </div>
 
@@ -560,11 +612,11 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
           </div>
         )}
 
-        {isUserPlanner && filteredActivities.length > 0 && (
+        {isUserPlanner && displayActivities.length > 0 && (
           <div className="mt-4">
             <button
               onClick={handleValidateActivities}
-              disabled={isLoading || isFetching}
+              disabled={isLoading}
               className="w-full py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-orange-600 hover:bg-orange-700"
             >
               Validate Activities Weight ({totalActivitiesWeight.toFixed(1)}% / {maxAllowedWeight}%)
@@ -574,18 +626,18 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
       </div>
 
       {/* Main Activities List */}
-      <div className="space-y-3" key={`activities-${refreshKey}-${filteredActivities.length}`}>
+      <div className="space-y-3" key={`activities-${refreshKey}-${displayActivities.length}`}>
         <h3 className="text-sm font-medium text-gray-700 flex items-center">
           <span className="inline-flex items-center px-2.5 py-0.5 mr-2 rounded-full text-xs font-medium bg-orange-100 text-orange-800">
-            Activities ({filteredActivities.length})
+            Activities ({displayActivities.length})
           </span>
           Main Activities
-          {(isLoading || isFetching) && (
+          {isLoading && (
             <Loader className="h-4 w-4 ml-2 animate-spin text-blue-500" />
           )}
         </h3>
         
-        {filteredActivities.map((activity) => {
+        {displayActivities.map((activity) => {
           const subActivitiesList = activity.sub_activities || [];
           
           // Calculate budget summary from sub-activities
@@ -799,7 +851,7 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
             className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <PlusCircle className="h-4 w-4 mr-2" />
-            {filteredActivities.length === 0 ? 'Create First Main Activity' : 
+            {displayActivities.length === 0 ? 'Create First Main Activity' : 
              remainingWeight <= 0 ? `No Weight Available (${remainingWeight.toFixed(1)}%)` :
              'Create New Main Activity'}
           </button>
