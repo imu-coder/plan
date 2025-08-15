@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { Download, FileSpreadsheet, File as FilePdf, Send, AlertCircle, CheckCircle, DollarSign, Building2, Target, Activity, BarChart3, Info, Loader } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Download, FileSpreadsheet, File as FilePdf, Send, AlertCircle, CheckCircle, DollarSign, Building2, Target, Activity, BarChart3, Info, Loader, RefreshCw } from 'lucide-react';
 import { useLanguage } from '../lib/i18n/LanguageContext';
-import { organizations, auth } from '../lib/api';
+import { organizations, auth, objectives, initiatives, performanceMeasures, mainActivities } from '../lib/api';
 import type { StrategicObjective } from '../types/organization';
 import type { PlanType } from '../types/plan';
 import { MONTHS } from '../types/plan';
@@ -20,6 +20,8 @@ interface PlanReviewTableProps {
   userOrgId?: number | null;
   isViewOnly?: boolean;
   planData?: any;
+  refreshKey?: number;
+  onDataRefresh?: (refreshedObjectives: any[]) => void;
 }
 
 const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
@@ -34,7 +36,9 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
   isPreviewMode = false,
   userOrgId = null,
   isViewOnly = false,
-  planData = null
+  planData = null,
+  refreshKey = 0,
+  onDataRefresh
 }) => {
   const { t } = useLanguage();
   const [isSubmittingPlan, setIsSubmittingPlan] = useState(false);
@@ -45,6 +49,8 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingError, setProcessingError] = useState<string | null>(null);
   const [effectiveUserOrgId, setEffectiveUserOrgId] = useState<number | null>(null);
+  const [isRefreshingData, setIsRefreshingData] = useState(false);
+  const [lastRefreshKey, setLastRefreshKey] = useState(refreshKey);
 
   // Determine the effective user organization ID
   useEffect(() => {
@@ -77,6 +83,136 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
     
     determineUserOrgId();
   }, [userOrgId, planData]);
+
+  // Force refresh data when refreshKey changes or component mounts
+  useEffect(() => {
+    const refreshObjectivesData = async () => {
+      if (!effectiveUserOrgId || objectives.length === 0) {
+        setProcessedObjectives(objectives);
+        return;
+      }
+
+      // Only refresh if refreshKey has changed or it's the first render
+      if (refreshKey === lastRefreshKey && processedObjectives.length > 0) {
+        return;
+      }
+
+      console.log('PlanReviewTable: Refreshing data due to refreshKey change:', refreshKey);
+      setIsRefreshingData(true);
+      setProcessingError(null);
+      setLastRefreshKey(refreshKey);
+
+      try {
+        // Fetch complete fresh data for each objective
+        const refreshedObjectives = await Promise.all(
+          objectives.map(async (objective) => {
+            try {
+              console.log(`PlanReviewTable: Refreshing objective ${objective.id} - ${objective.title}`);
+              
+              // Get fresh initiatives for this objective
+              const initiativesResponse = await initiatives.getByObjective(objective.id.toString());
+              const freshInitiatives = initiativesResponse?.data || [];
+              
+              console.log(`PlanReviewTable: Found ${freshInitiatives.length} initiatives for objective ${objective.id}`);
+
+              // Filter initiatives for user's organization
+              const userInitiatives = freshInitiatives.filter(initiative => {
+                const isDefault = initiative.is_default === true;
+                const hasNoOrg = !initiative.organization || initiative.organization === null;
+                const belongsToUserOrg = initiative.organization && 
+                                        (Number(initiative.organization) === Number(effectiveUserOrgId) ||
+                                         String(initiative.organization) === String(effectiveUserOrgId));
+                
+                const shouldInclude = isDefault || hasNoOrg || belongsToUserOrg;
+                console.log(`PlanReviewTable: Initiative "${initiative.name}" - include: ${shouldInclude}`);
+                return shouldInclude;
+              });
+
+              // For each initiative, get fresh performance measures and main activities
+              const enrichedInitiatives = await Promise.all(
+                userInitiatives.map(async (initiative) => {
+                  try {
+                    console.log(`PlanReviewTable: Refreshing data for initiative ${initiative.id}`);
+                    
+                    // Get fresh performance measures
+                    const measuresResponse = await performanceMeasures.getByInitiative(initiative.id);
+                    const allMeasures = measuresResponse?.data || [];
+                    const userMeasures = allMeasures.filter(measure =>
+                      !measure.organization || 
+                      Number(measure.organization) === Number(effectiveUserOrgId) ||
+                      String(measure.organization) === String(effectiveUserOrgId)
+                    );
+
+                    // Get fresh main activities
+                    const activitiesResponse = await mainActivities.getByInitiative(initiative.id);
+                    const allActivities = activitiesResponse?.data || [];
+                    const userActivities = allActivities.filter(activity => {
+                      const hasNoOrg = !activity.organization || activity.organization === null;
+                      const belongsToUserOrg = activity.organization && 
+                                              (Number(activity.organization) === Number(effectiveUserOrgId) ||
+                                               String(activity.organization) === String(effectiveUserOrgId));
+                      const shouldInclude = hasNoOrg || belongsToUserOrg;
+                      console.log(`PlanReviewTable: Activity "${activity.name}" - include: ${shouldInclude}`);
+                      return shouldInclude;
+                    });
+
+                    console.log(`PlanReviewTable: Initiative ${initiative.name} - ${userMeasures.length} measures, ${userActivities.length} activities`);
+
+                    return {
+                      ...initiative,
+                      performance_measures: userMeasures,
+                      main_activities: userActivities
+                    };
+                  } catch (error) {
+                    console.error(`PlanReviewTable: Error refreshing initiative ${initiative.id}:`, error);
+                    return {
+                      ...initiative,
+                      performance_measures: initiative.performance_measures || [],
+                      main_activities: initiative.main_activities || []
+                    };
+                  }
+                })
+              );
+
+              const refreshedObjective = {
+                ...objective,
+                initiatives: enrichedInitiatives
+              };
+
+              console.log(`PlanReviewTable: Refreshed objective ${objective.title} with ${enrichedInitiatives.length} initiatives`);
+              return refreshedObjective;
+            } catch (error) {
+              console.error(`PlanReviewTable: Error refreshing objective ${objective.id}:`, error);
+              return objective; // Return original if refresh fails
+            }
+          })
+        );
+
+        console.log('PlanReviewTable: Successfully refreshed all objectives data');
+        setProcessedObjectives(refreshedObjectives);
+        
+        // Notify parent component about refreshed data
+        if (onDataRefresh) {
+          onDataRefresh(refreshedObjectives);
+        }
+      } catch (error) {
+        console.error('PlanReviewTable: Error refreshing objectives data:', error);
+        setProcessingError('Failed to refresh latest data. Showing available data.');
+        // Fall back to original objectives if refresh fails
+        setProcessedObjectives(objectives);
+      } finally {
+        setIsRefreshingData(false);
+      }
+    };
+
+    refreshObjectivesData();
+  }, [objectives, effectiveUserOrgId, refreshKey, lastRefreshKey, onDataRefresh]);
+
+  // Manual refresh function
+  const handleManualRefresh = async () => {
+    console.log('PlanReviewTable: Manual refresh triggered');
+    setLastRefreshKey(Date.now()); // Force refresh by changing key
+  };
 
   // Auto-fetch data when component mounts or key props change
   useEffect(() => {
@@ -172,7 +308,13 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
     try {
       console.log(`PlanReviewTable: PRODUCTION-SAFE Processing ${objectives.length} objectives for user org ${effectiveUserOrgId}`);
       
-      const filteredObjectives = objectives.map((objective, objIndex) => {
+      // Use refreshed data if available, otherwise process original objectives
+      const objectivesToProcess = processedObjectives.length > 0 ? processedObjectives : objectives;
+      
+      console.log('PlanReviewTable: Processing objectives for user org:', effectiveUserOrgId);
+      console.log('PlanReviewTable: Using data source:', processedObjectives.length > 0 ? 'refreshed' : 'original');
+      
+      const filteredObjectives = objectivesToProcess.map((objective, objIndex) => {
         if (!objective) {
           console.warn(`PlanReviewTable: Objective ${objIndex} is null/undefined`);
           return objective;
@@ -400,6 +542,16 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
     }
   };
 
+  // Show refreshing state
+  if (isRefreshingData) {
+    return (
+      <div className="flex items-center justify-center p-8">
+        <Loader className="h-6 w-6 animate-spin mr-2 text-blue-600" />
+        <span className="text-lg">Refreshing latest data...</span>
+      </div>
+    );
+  }
+
   // Show loading if processing or no organization context
   if (isProcessing) {
     return (
@@ -418,13 +570,11 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
         <h3 className="text-lg font-medium text-red-800">Data Processing Error</h3>
         <p className="text-red-600 mt-2">{processingError}</p>
         <button
-          onClick={() => {
-            setProcessingError(null);
-            processObjectivesData();
-          }}
-          className="mt-4 px-4 py-2 bg-white border border-red-300 rounded-md text-red-700 hover:bg-red-50"
+          onClick={handleManualRefresh}
+          className="mt-4 px-4 py-2 bg-blue-100 text-blue-700 rounded-md hover:bg-blue-200 flex items-center mx-auto"
         >
-          Try Again
+          <RefreshCw className="h-4 w-4 mr-2" />
+          Refresh Data
         </button>
       </div>
     );
@@ -453,13 +603,11 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
           }
         </p>
         <button
-          onClick={() => {
-            console.log('PlanReviewTable: Manual refresh triggered');
-            processObjectivesData();
-          }}
-          className="mt-4 px-4 py-2 bg-blue-100 text-blue-700 rounded-md hover:bg-blue-200"
+          onClick={handleManualRefresh}
+          className="mt-4 px-4 py-2 bg-blue-100 text-blue-700 rounded-md hover:bg-blue-200 flex items-center mx-auto"
         >
-          Refresh Data
+          <RefreshCw className="h-4 w-4 mr-2" />
+          Check for New Data
         </button>
       </div>
     );
@@ -1080,6 +1228,23 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
         <h3 className="text-lg font-medium text-gray-900">Complete Plan Details</h3>
         <div className="flex space-x-2">
           <button
+            onClick={handleManualRefresh}
+            disabled={isRefreshingData}
+            className="flex items-center px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50"
+          >
+            {isRefreshingData ? (
+              <>
+                <Loader className="h-4 w-4 mr-2 animate-spin" />
+                Refreshing...
+              </>
+            ) : (
+              <>
+                <RefreshCw className="h-4 w-4 mr-2" />
+                Refresh
+              </>
+            )}
+          </button>
+          <button
             onClick={handleExportExcel}
             disabled={!processedObjectives?.length}
             className="inline-flex items-center px-3 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
@@ -1125,10 +1290,7 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
             }
           </p>
           <button
-            onClick={() => {
-              console.log('PlanReviewTable: Manual refresh triggered from table view');
-              processObjectivesData();
-            }}
+            onClick={handleManualRefresh}
             disabled={isProcessing}
             className="mt-4 px-4 py-2 bg-yellow-100 text-yellow-700 rounded-md hover:bg-yellow-200 disabled:opacity-50"
           >
