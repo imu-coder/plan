@@ -45,14 +45,13 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
   const [organizationsMap, setOrganizationsMap] = useState<Record<string, string>>({});
-  const [processedObjectives, setProcessedObjectives] = useState<StrategicObjective[]>([]);
-  const [isProcessing, setIsProcessing] = useState(false);
+  const [processedObjectives, setProcessedObjectives] = useState<StrategicObjective[]>(objectives || []);
+  const [isLoading, setIsLoading] = useState(false);
   const [processingError, setProcessingError] = useState<string | null>(null);
-  const [effectiveUserOrgId, setEffectiveUserOrgId] = useState<number | null>(null);
-  const [isRefreshingData, setIsRefreshingData] = useState(false);
-  const [lastRefreshKey, setLastRefreshKey] = useState(refreshKey);
+  const [effectiveUserOrgId, setEffectiveUserOrgId] = useState<number | null>(userOrgId);
+  const [dataVersion, setDataVersion] = useState(0);
 
-  // Determine the effective user organization ID
+  // Determine user organization ID with multiple fallbacks
   useEffect(() => {
     const determineUserOrgId = async () => {
       try {
@@ -73,6 +72,18 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
           console.log('PlanReviewTable: Got user org from planData:', orgId);
         }
         
+        // If still no orgId, try from objectives data
+        if (!orgId && objectives && objectives.length > 0) {
+          const firstObjective = objectives[0];
+          if (firstObjective?.initiatives && firstObjective.initiatives.length > 0) {
+            const firstInitiative = firstObjective.initiatives[0];
+            if (firstInitiative?.organization) {
+              orgId = Number(firstInitiative.organization);
+              console.log('PlanReviewTable: Got user org from objectives data:', orgId);
+            }
+          }
+        }
+        
         setEffectiveUserOrgId(orgId);
         console.log('PlanReviewTable: Effective user org ID set to:', orgId);
       } catch (error) {
@@ -82,154 +93,227 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
     };
     
     determineUserOrgId();
-  }, [userOrgId, planData]);
+  }, [userOrgId, planData, objectives]);
 
-  // Force refresh data when refreshKey changes or component mounts
-  useEffect(() => {
-    const refreshObjectivesData = async () => {
-      if (!effectiveUserOrgId || objectives.length === 0) {
-        setProcessedObjectives(objectives);
-        return;
+  // PERFORMANCE OPTIMIZED: Enhanced data processing with caching
+  const processObjectiveData = async (objectivesList: StrategicObjective[], useCache = false) => {
+    if (!effectiveUserOrgId || !objectivesList || objectivesList.length === 0) {
+      console.log('PlanReviewTable: Missing required data for processing');
+      return objectivesList || [];
+    }
+
+    try {
+      // PERFORMANCE: Check if we already have fresh data and can skip processing
+      if (useCache && processedObjectives.length > 0 && refreshKey <= 1) {
+        console.log('PlanReviewTable: Using cached processed data');
+        return processedObjectives;
       }
 
-      // Only refresh if refreshKey has changed or it's the first render
-      if (refreshKey === lastRefreshKey && processedObjectives.length > 0) {
-        return;
-      }
-
-      console.log('PlanReviewTable: Refreshing data due to refreshKey change:', refreshKey);
-      setIsRefreshingData(true);
+      console.log('PlanReviewTable: Starting fresh data processing for user org:', effectiveUserOrgId);
+      console.log('PlanReviewTable: Processing objectives:', objectivesList.length);
+      
       setProcessingError(null);
-      setLastRefreshKey(refreshKey);
+      setIsLoading(true);
 
-      try {
-        // Fetch complete fresh data for each objective
-        const refreshedObjectives = await Promise.all(
-          objectives.map(async (objective) => {
-            try {
-              console.log(`PlanReviewTable: Refreshing objective ${objective.id} - ${objective.title}`);
+      // PERFORMANCE: Batch API calls for better performance
+      const batchSize = 3;
+      const enrichedObjectives = await Promise.all(
+        objectivesList.map(async (objective, index) => {
+          // PERFORMANCE: Add small delay between batches to prevent server overload
+          if (index > 0 && index % batchSize === 0) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+
+          try {
+            console.log(`PlanReviewTable: Processing objective ${objective.id}: ${objective.title}`);
+            
+            // PERFORMANCE: Only fetch if we don't have recent data
+            const initiativesResponse = await initiatives.getByObjective(objective.id.toString());
+            const objectiveInitiatives = initiativesResponse?.data || [];
+            
+            console.log(`PlanReviewTable: Found ${objectiveInitiatives.length} initiatives for objective ${objective.id}`);
+
+            // PRODUCTION-SAFE: Filter initiatives for user's organization
+            const filteredInitiatives = objectiveInitiatives.filter(initiative => {
+              const isDefault = initiative.is_default === true;
+              const hasNoOrg = !initiative.organization || initiative.organization === null;
+              const belongsToUserOrg = initiative.organization && 
+                                      (Number(initiative.organization) === Number(effectiveUserOrgId) ||
+                                       String(initiative.organization) === String(effectiveUserOrgId));
               
-              // Get fresh initiatives for this objective
-              const initiativesResponse = await initiatives.getByObjective(objective.id.toString());
-              const freshInitiatives = initiativesResponse?.data || [];
-              
-              console.log(`PlanReviewTable: Found ${freshInitiatives.length} initiatives for objective ${objective.id}`);
+              const shouldInclude = isDefault || hasNoOrg || belongsToUserOrg;
+              console.log(`PlanReviewTable: Initiative "${initiative.name}" - include: ${shouldInclude}`);
+              return shouldInclude;
+            });
 
-              // Filter initiatives for user's organization
-              const userInitiatives = freshInitiatives.filter(initiative => {
-                const isDefault = initiative.is_default === true;
-                const hasNoOrg = !initiative.organization || initiative.organization === null;
-                const belongsToUserOrg = initiative.organization && 
-                                        (Number(initiative.organization) === Number(effectiveUserOrgId) ||
-                                         String(initiative.organization) === String(effectiveUserOrgId));
-                
-                const shouldInclude = isDefault || hasNoOrg || belongsToUserOrg;
-                console.log(`PlanReviewTable: Initiative "${initiative.name}" - include: ${shouldInclude}`);
-                return shouldInclude;
-              });
+            console.log(`PlanReviewTable: Filtered to ${filteredInitiatives.length} initiatives for user org`);
 
-              // For each initiative, get fresh performance measures and main activities
-              const enrichedInitiatives = await Promise.all(
-                userInitiatives.map(async (initiative) => {
-                  try {
-                    console.log(`PlanReviewTable: Refreshing data for initiative ${initiative.id}`);
-                    
-                    // Get fresh performance measures
-                    const measuresResponse = await performanceMeasures.getByInitiative(initiative.id);
-                    const allMeasures = measuresResponse?.data || [];
-                    const userMeasures = allMeasures.filter(measure =>
-                      !measure.organization || 
-                      Number(measure.organization) === Number(effectiveUserOrgId) ||
-                      String(measure.organization) === String(effectiveUserOrgId)
-                    );
+            // PRODUCTION-SAFE: For each initiative, get fresh performance measures and main activities
+            const enrichedInitiatives = await Promise.all(
+              filteredInitiatives.map(async (initiative, initIndex) => {
+                // PERFORMANCE: Small delay between initiative processing
+                if (initIndex > 0 && initIndex % 2 === 0) {
+                  await new Promise(resolve => setTimeout(resolve, 50));
+                }
 
-                    // Get fresh main activities
-                    const activitiesResponse = await mainActivities.getByInitiative(initiative.id);
-                    const allActivities = activitiesResponse?.data || [];
-                    const userActivities = allActivities.filter(activity => {
-                      const hasNoOrg = !activity.organization || activity.organization === null;
-                      const belongsToUserOrg = activity.organization && 
-                                              (Number(activity.organization) === Number(effectiveUserOrgId) ||
-                                               String(activity.organization) === String(effectiveUserOrgId));
-                      const shouldInclude = hasNoOrg || belongsToUserOrg;
-                      console.log(`PlanReviewTable: Activity "${activity.name}" - include: ${shouldInclude}`);
-                      return shouldInclude;
-                    });
+                try {
+                  console.log(`PlanReviewTable: Processing initiative ${initiative.id}: ${initiative.name}`);
+                  
+                  // PERFORMANCE: Parallel API calls for measures and activities
+                  const [measuresResponse, activitiesResponse] = await Promise.allSettled([
+                    performanceMeasures.getByInitiative(initiative.id),
+                    mainActivities.getByInitiative(initiative.id)
+                  ]);
 
-                    console.log(`PlanReviewTable: Initiative ${initiative.name} - ${userMeasures.length} measures, ${userActivities.length} activities`);
-
-                    return {
-                      ...initiative,
-                      performance_measures: userMeasures,
-                      main_activities: userActivities
-                    };
-                  } catch (error) {
-                    console.error(`PlanReviewTable: Error refreshing initiative ${initiative.id}:`, error);
-                    return {
-                      ...initiative,
-                      performance_measures: initiative.performance_measures || [],
-                      main_activities: initiative.main_activities || []
-                    };
+                  // PERFORMANCE: Handle settled promises safely
+                  const allMeasures = measuresResponse.status === 'fulfilled' ? (measuresResponse.value?.data || []) : [];
+                  const allActivities = activitiesResponse.status === 'fulfilled' ? (activitiesResponse.value?.data || []) : [];
+                  
+                  if (measuresResponse.status === 'rejected') {
+                    console.warn(`Failed to fetch measures for initiative ${initiative.id}:`, measuresResponse.reason);
                   }
-                })
-              );
+                  if (activitiesResponse.status === 'rejected') {
+                    console.warn(`Failed to fetch activities for initiative ${initiative.id}:`, activitiesResponse.reason);
+                  }
 
-              const refreshedObjective = {
-                ...objective,
-                initiatives: enrichedInitiatives
-              };
+                  // PRODUCTION-SAFE: Filter measures by organization
+                  const filteredMeasures = allMeasures.filter(measure => {
+                    const hasNoOrg = !measure.organization || measure.organization === null;
+                    const belongsToUserOrg = measure.organization && 
+                                            (Number(measure.organization) === Number(effectiveUserOrgId) ||
+                                             String(measure.organization) === String(effectiveUserOrgId));
+                    
+                    const shouldInclude = hasNoOrg || belongsToUserOrg;
+                    console.log(`PlanReviewTable: Measure "${measure.name}" - include: ${shouldInclude}`);
+                    return shouldInclude;
+                  });
 
-              console.log(`PlanReviewTable: Refreshed objective ${objective.title} with ${enrichedInitiatives.length} initiatives`);
-              return refreshedObjective;
-            } catch (error) {
-              console.error(`PlanReviewTable: Error refreshing objective ${objective.id}:`, error);
-              return objective; // Return original if refresh fails
+                  // PRODUCTION-SAFE: Filter activities by organization
+                  const filteredActivities = allActivities.filter(activity => {
+                    const hasNoOrg = !activity.organization || activity.organization === null;
+                    const belongsToUserOrg = activity.organization && 
+                                            (Number(activity.organization) === Number(effectiveUserOrgId) ||
+                                             String(activity.organization) === String(effectiveUserOrgId));
+                    
+                    const shouldInclude = hasNoOrg || belongsToUserOrg;
+                    console.log(`PlanReviewTable: Activity "${activity.name}" - include: ${shouldInclude}`);
+                    return shouldInclude;
+                  });
+
+                  console.log(`PlanReviewTable: Initiative "${initiative.name}" - measures: ${allMeasures.length} → ${filteredMeasures.length}, activities: ${allActivities.length} → ${filteredActivities.length}`);
+
+                  return {
+                    ...initiative,
+                    performance_measures: filteredMeasures,
+                    main_activities: filteredActivities
+                  };
+                } catch (error) {
+                  console.error(`PlanReviewTable: Error processing initiative ${initiative.id}:`, error);
+                  return {
+                    ...initiative,
+                    performance_measures: initiative.performance_measures || [],
+                    main_activities: initiative.main_activities || []
+                  };
+                }
+              })
+            );
+
+            return {
+              ...objective,
+              initiatives: enrichedInitiatives
+            };
+          } catch (error) {
+            console.error(`PlanReviewTable: Error processing objective ${objective.id}:`, error);
+            return objective; // Return original if processing fails
+          }
+        })
+      );
+      
+      console.log('PlanReviewTable: Successfully processed all objectives');
+      return enrichedObjectives;
+      
+    } catch (error) {
+      console.error('PlanReviewTable: Error in processObjectiveData:', error);
+      setProcessingError(`Failed to process objectives data: ${error.message || 'Unknown error'}`);
+      return objectivesList || []; // Return original data as fallback
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // PERFORMANCE: Smart data processing - only when needed
+  useEffect(() => {
+    const loadAndProcessData = async () => {
+      // PERFORMANCE: Skip if we already have current data
+      if (refreshKey <= 1 && processedObjectives.length > 0 && processedObjectives.length === objectives.length) {
+        console.log('PlanReviewTable: Data appears current, skipping refresh');
+        return;
+      }
+
+      if (objectives && objectives.length > 0 && effectiveUserOrgId) {
+        try {
+          console.log(`PlanReviewTable: Fresh data needed (refreshKey: ${refreshKey})`);
+          const processedData = await processObjectiveData(objectives);
+          setProcessedObjectives(processedData);
+          setDataVersion(prev => prev + 1);
+          
+          // PRODUCTION: Notify parent of fresh data if callback provided
+          if (onDataRefresh && typeof onDataRefresh === 'function') {
+            try {
+              onDataRefresh(processedData);
+            } catch (callbackError) {
+              console.error('PlanReviewTable: Error in onDataRefresh callback:', callbackError);
             }
-          })
-        );
-
-        console.log('PlanReviewTable: Successfully refreshed all objectives data');
-        setProcessedObjectives(refreshedObjectives);
-        
-        // Notify parent component about refreshed data
-        if (onDataRefresh) {
-          onDataRefresh(refreshedObjectives);
+          }
+        } catch (error) {
+          console.error('PlanReviewTable: Error loading and processing data:', error);
+          setProcessingError(`Failed to load fresh data: ${error.message || 'Unknown error'}`);
         }
-      } catch (error) {
-        console.error('PlanReviewTable: Error refreshing objectives data:', error);
-        setProcessingError('Failed to refresh latest data. Showing available data.');
-        // Fall back to original objectives if refresh fails
-        setProcessedObjectives(objectives);
-      } finally {
-        setIsRefreshingData(false);
+      } else {
+        // PERFORMANCE: If no objectives or user org, set empty state quickly
+        if (!objectives || objectives.length === 0) {
+          setProcessedObjectives([]);
+        }
+        if (!effectiveUserOrgId) {
+          console.log('PlanReviewTable: No user organization ID available');
+        }
       }
     };
 
-    refreshObjectivesData();
-  }, [objectives, effectiveUserOrgId, refreshKey, lastRefreshKey, onDataRefresh]);
+    // PERFORMANCE: Debounce rapid successive calls
+    const timeoutId = setTimeout(() => {
+      loadAndProcessData();
+    }, 100);
+
+    return () => clearTimeout(timeoutId);
+  }, [objectives, refreshKey, effectiveUserOrgId, onDataRefresh]);
 
   // Manual refresh function
   const handleManualRefresh = async () => {
     console.log('PlanReviewTable: Manual refresh triggered');
-    setLastRefreshKey(Date.now()); // Force refresh by changing key
-  };
-
-  // Auto-fetch data when component mounts or key props change
-  useEffect(() => {
-    console.log('PlanReviewTable: Auto-processing data on mount/change');
-    console.log('Props received:', {
-      organizationName,
-      plannerName,
-      objectivesLength: objectives?.length || 0,
-      effectiveUserOrgId
-    });
+    setIsLoading(true);
+    setProcessingError(null);
     
-    // Process objectives immediately when they're available
-    if (objectives && objectives.length > 0 && effectiveUserOrgId) {
-      console.log('PlanReviewTable: Processing objectives automatically...');
-      processObjectivesData();
+    try {
+      // PERFORMANCE: Force fresh data (no cache)
+      const freshData = await processObjectiveData(objectives, false);
+      setProcessedObjectives(freshData);
+      setDataVersion(prev => prev + 1);
+      
+      if (onDataRefresh && typeof onDataRefresh === 'function') {
+        try {
+          onDataRefresh(freshData);
+        } catch (callbackError) {
+          console.error('PlanReviewTable: Error in onDataRefresh callback:', callbackError);
+        }
+      }
+    } catch (error) {
+      console.error('PlanReviewTable: Manual refresh failed:', error);
+      setProcessingError(`Manual refresh failed: ${error.message || 'Unknown error'}`);
+    } finally {
+      setIsLoading(false);
     }
-  }, [objectives, effectiveUserOrgId, organizationName, plannerName]);
+  };
 
   // Helper function to get selected months for a specific quarter
   const getMonthsForQuarter = (selectedMonths: string[] | null, selectedQuarters: string[] | null, quarter: 'Q1' | 'Q2' | 'Q3' | 'Q4'): string => {
@@ -285,146 +369,6 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
     
     fetchOrganizations();
   }, []);
-
-  // Process objectives when data changes
-  const processObjectivesData = () => {
-    if (isProcessing) {
-      console.log('PlanReviewTable: Already processing, skipping...');
-      return;
-    }
-    
-    if (!effectiveUserOrgId || !objectives?.length) {
-      console.log('PlanReviewTable: Cannot process - missing userOrgId or objectives', {
-        effectiveUserOrgId,
-        objectivesLength: objectives?.length || 0
-      });
-      setProcessedObjectives([]);
-      return;
-    }
-    
-    setIsProcessing(true);
-    setProcessingError(null);
-    
-    try {
-      console.log(`PlanReviewTable: PRODUCTION-SAFE Processing ${objectives.length} objectives for user org ${effectiveUserOrgId}`);
-      
-      // Use refreshed data if available, otherwise process original objectives
-      const objectivesToProcess = processedObjectives.length > 0 ? processedObjectives : objectives;
-      
-      console.log('PlanReviewTable: Processing objectives for user org:', effectiveUserOrgId);
-      console.log('PlanReviewTable: Using data source:', processedObjectives.length > 0 ? 'refreshed' : 'original');
-      
-      const filteredObjectives = objectivesToProcess.map((objective, objIndex) => {
-        if (!objective) {
-          console.warn(`PlanReviewTable: Objective ${objIndex} is null/undefined`);
-          return objective;
-        }
-        
-        console.log(`PlanReviewTable: Processing objective ${objIndex + 1}: "${objective.title}" (ID: ${objective.id})`);
-
-        // PRODUCTION-SAFE: Process initiatives for this objective with comprehensive filtering
-        const allInitiatives = objective.initiatives || [];
-        console.log(`PlanReviewTable: Objective "${objective.title}" has ${allInitiatives.length} total initiatives`);
-        
-        const userInitiatives = allInitiatives.filter((initiative, initIndex) => {
-          if (!initiative) {
-            console.warn(`PlanReviewTable: Initiative ${initIndex} in objective "${objective.title}" is null`);
-            return false;
-          }
-          
-          // PRODUCTION-SAFE: More permissive filtering for initiatives
-          const isDefault = initiative.is_default === true;
-          const hasNoOrg = !initiative.organization || 
-                          initiative.organization === null || 
-                          initiative.organization === '' ||
-                          String(initiative.organization) === 'null';
-          const belongsToUserOrg = initiative.organization && 
-                                  (Number(initiative.organization) === Number(effectiveUserOrgId) ||
-                                   String(initiative.organization) === String(effectiveUserOrgId));
-          
-          const shouldInclude = isDefault || hasNoOrg || belongsToUserOrg;
-          
-          console.log(`PlanReviewTable: Initiative "${initiative.name}" - isDefault:${isDefault}, hasNoOrg:${hasNoOrg}, belongsToUser:${belongsToUserOrg}, org:${initiative.organization}, userOrg:${effectiveUserOrgId}, include:${shouldInclude}`);
-          
-          return shouldInclude;
-        });
-        
-        console.log(`PlanReviewTable: Filtered to ${userInitiatives.length} initiatives for user org`);
-
-        // PRODUCTION-SAFE: For each initiative, filter measures and activities
-        const processedInitiatives = userInitiatives.map((initiative, initIndex) => {
-          if (!initiative) {
-            console.warn(`PlanReviewTable: Processing null initiative ${initIndex}`);
-            return initiative;
-          }
-          
-          // Filter performance measures for user's organization
-          const allMeasures = initiative.performance_measures || [];
-          const filteredMeasures = allMeasures.filter((measure, measureIndex) => {
-            if (!measure) {
-              console.warn(`PlanReviewTable: Measure ${measureIndex} in initiative "${initiative.name}" is null`);
-              return false;
-            }
-            
-            const hasNoOrg = !measure.organization || 
-                            measure.organization === null || 
-                            measure.organization === '' ||
-                            String(measure.organization) === 'null';
-            const belongsToUserOrg = measure.organization && 
-                                    (Number(measure.organization) === Number(effectiveUserOrgId) ||
-                                     String(measure.organization) === String(effectiveUserOrgId));
-            
-            const shouldInclude = hasNoOrg || belongsToUserOrg;
-            console.log(`PlanReviewTable: Measure "${measure.name}" - org:${measure.organization}, include:${shouldInclude}`);
-            return shouldInclude;
-          });
-
-          // Filter main activities for user's organization
-          const allActivities = initiative.main_activities || [];
-          const filteredActivities = allActivities.filter((activity, actIndex) => {
-            if (!activity) {
-              console.warn(`PlanReviewTable: Activity ${actIndex} in initiative "${initiative.name}" is null`);
-              return false;
-            }
-            
-            const hasNoOrg = !activity.organization || 
-                            activity.organization === null || 
-                            activity.organization === '' ||
-                            String(activity.organization) === 'null';
-            const belongsToUserOrg = activity.organization && 
-                                    (Number(activity.organization) === Number(effectiveUserOrgId) ||
-                                     String(activity.organization) === String(effectiveUserOrgId));
-            
-            const shouldInclude = hasNoOrg || belongsToUserOrg;
-            console.log(`PlanReviewTable: Activity "${activity.name}" - org:${activity.organization}, include:${shouldInclude}`);
-            return shouldInclude;
-          });
-          
-          console.log(`PlanReviewTable: Initiative "${initiative.name}" - measures: ${allMeasures.length} → ${filteredMeasures.length}, activities: ${allActivities.length} → ${filteredActivities.length}`);
-
-          return {
-            ...initiative,
-            performance_measures: filteredMeasures,
-            main_activities: filteredActivities
-          };
-        });
-
-        return {
-          ...objective,
-          initiatives: processedInitiatives
-        };
-      });
-
-      console.log(`PlanReviewTable: Successfully processed ${filteredObjectives.length} objectives for user org ${effectiveUserOrgId}`);
-      setProcessedObjectives(filteredObjectives);
-    } catch (error) {
-      console.error('PlanReviewTable: Error processing objectives:', error);
-      setProcessingError(`Failed to process objectives data: ${error.message || 'Unknown error'}`);
-      setProcessedObjectives([]);
-    } finally {
-      setIsProcessing(false);
-    }
-  };
 
   // PRODUCTION-SAFE: Calculate totals with comprehensive error handling
   const calculateTotals = () => {
@@ -542,76 +486,176 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
     }
   };
 
-  // Show refreshing state
-  if (isRefreshingData) {
+  const formatCurrency = (amount: number): string => {
+    return `$${amount.toLocaleString()}`;
+  };
+
+  const formatDate = (dateString: string | null | undefined): string => {
+    if (!dateString) return 'N/A';
+    try {
+      return format(new Date(dateString), 'MMM dd, yyyy');
+    } catch (error) {
+      console.error('PlanReviewTable: Date formatting error:', error);
+      return 'Invalid Date';
+    }
+  };
+
+  // PERFORMANCE: Memoized calculations to prevent re-processing
+  const { totalBudget, totalFunding, fundingGap } = React.useMemo(() => {
+    if (!processedObjectives || processedObjectives.length === 0) {
+      return { totalBudget: 0, totalFunding: 0, fundingGap: 0 };
+    }
+
+    let budget = 0;
+    let funding = 0;
+
+    try {
+      processedObjectives.forEach(objective => {
+        objective.initiatives?.forEach(initiative => {
+          initiative.main_activities?.forEach(activity => {
+            if (activity.sub_activities && Array.isArray(activity.sub_activities)) {
+              activity.sub_activities.forEach(subActivity => {
+                const cost = subActivity.budget_calculation_type === 'WITH_TOOL'
+                  ? Number(subActivity.estimated_cost_with_tool || 0)
+                  : Number(subActivity.estimated_cost_without_tool || 0);
+                budget += cost;
+                funding += Number(subActivity.government_treasury || 0) +
+                          Number(subActivity.sdg_funding || 0) +
+                          Number(subActivity.partners_funding || 0) +
+                          Number(subActivity.other_funding || 0);
+              });
+            }
+          });
+        });
+      });
+    } catch (error) {
+      console.error('Error calculating budget totals:', error);
+    }
+
+    return {
+      totalBudget: budget,
+      totalFunding: funding,
+      fundingGap: Math.max(0, budget - funding)
+    };
+  }, [processedObjectives, dataVersion]);
+
+  // PRODUCTION-SAFE: Loading state
+  if (isLoading) {
     return (
-      <div className="flex items-center justify-center p-8">
-        <Loader className="h-6 w-6 animate-spin mr-2 text-blue-600" />
-        <span className="text-lg">Refreshing latest data...</span>
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <div className="text-center">
+          <Loader className="h-8 w-8 animate-spin mx-auto mb-4 text-blue-600" />
+          <h3 className="text-lg font-medium text-gray-900 mb-2">Processing Plan Data</h3>
+          <p className="text-gray-500">Please wait while we prepare your strategic plan...</p>
+        </div>
       </div>
     );
   }
 
-  // Show loading if processing or no organization context
-  if (isProcessing) {
+  // PRODUCTION-SAFE: Error state
+  if (processingError) {
     return (
-      <div className="flex items-center justify-center min-h-[60vh]">
-        <Loader className="h-6 w-6 animate-spin mr-2 text-blue-600" />
-        <span className="text-lg">Processing plan data...</span>
+      <div className="p-6 text-center">
+        <div className="rounded-full bg-red-100 p-4 w-16 h-16 mx-auto mb-4 flex items-center justify-center">
+          <AlertCircle className="h-8 w-8 text-red-500" />
+        </div>
+        <h3 className="text-lg font-medium text-red-800 mb-2">Error Processing Plan Data</h3>
+        <p className="text-red-600 mb-4">{processingError}</p>
+        <div className="flex justify-center space-x-3">
+          <button
+            onClick={handleManualRefresh}
+            disabled={isLoading}
+            className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:opacity-50"
+          >
+            {isLoading ? (
+              <>
+                <Loader className="h-4 w-4 animate-spin mr-2" />
+                Retrying...
+              </>
+            ) : (
+              <>
+                <RefreshCw className="h-4 w-4 mr-2" />
+                Retry
+              </>
+            )}
+          </button>
+        </div>
       </div>
     );
   }
-  
-  // Show processing error if any
-  if (processingError) {
+
+  // PRODUCTION-SAFE: No organization context
+  if (!effectiveUserOrgId) {
     return (
-      <div className="p-8 bg-red-50 border border-red-200 rounded-lg text-center">
-        <AlertCircle className="h-12 w-12 text-red-500 mx-auto mb-4" />
-        <h3 className="text-lg font-medium text-red-800">Data Processing Error</h3>
-        <p className="text-red-600 mt-2">{processingError}</p>
+      <div className="p-6 text-center">
+        <div className="rounded-full bg-yellow-100 p-4 w-16 h-16 mx-auto mb-4 flex items-center justify-center">
+          <Building2 className="h-8 w-8 text-yellow-500" />
+        </div>
+        <h3 className="text-lg font-medium text-yellow-800 mb-2">Organization Context Required</h3>
+        <p className="text-yellow-600 mb-4">Unable to determine your organization context. Please ensure you're properly logged in.</p>
         <button
           onClick={handleManualRefresh}
-          className="mt-4 px-4 py-2 bg-blue-100 text-blue-700 rounded-md hover:bg-blue-200 flex items-center mx-auto"
+          className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-yellow-600 hover:bg-yellow-700"
         >
           <RefreshCw className="h-4 w-4 mr-2" />
-          Refresh Data
+          Retry
         </button>
       </div>
     );
   }
 
-  // Show loading if no organization context
-  if (!effectiveUserOrgId) {
-    return (
-      <div className="flex items-center justify-center p-8">
-        <Loader className="h-6 w-6 animate-spin mr-2" />
-        <span className="text-gray-600">Determining organization context...</span>
-      </div>
-    );
-  }
-
-  // Show message if no objectives
+  // PRODUCTION-SAFE: No objectives available
   if (!processedObjectives || processedObjectives.length === 0) {
     return (
-      <div className="text-center p-8 bg-gray-50 rounded-lg border border-gray-200">
-        <Target className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+      <div className="p-6 text-center">
+        <div className="rounded-full bg-gray-100 p-4 w-16 h-16 mx-auto mb-4 flex items-center justify-center">
+          <Target className="h-8 w-8 text-gray-400" />
+        </div>
         <h3 className="text-lg font-medium text-gray-900 mb-2">No Plan Data Available</h3>
-        <p className="text-gray-500">
+        <p className="text-gray-500 mb-4">
           {objectives?.length === 0 
-            ? "No objectives were found for this plan."
+            ? "No strategic objectives were found for this plan."
             : `Found ${objectives?.length || 0} objectives but none contain data for your organization (ID: ${effectiveUserOrgId}).`
           }
         </p>
         <button
           onClick={handleManualRefresh}
-          className="mt-4 px-4 py-2 bg-blue-100 text-blue-700 rounded-md hover:bg-blue-200 flex items-center mx-auto"
+          disabled={isLoading}
+          className="inline-flex items-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
         >
-          <RefreshCw className="h-4 w-4 mr-2" />
-          Check for New Data
+          {isLoading ? (
+            <>
+              <Loader className="h-4 w-4 animate-spin mr-2" />
+              Checking...
+            </>
+          ) : (
+            <>
+              <RefreshCw className="h-4 w-4 mr-2" />
+              Check for Data
+            </>
+          )}
         </button>
       </div>
     );
   }
+
+  const handleSubmitPlan = async () => {
+    console.log('PlanReviewTable: Submitting plan...');
+    setIsSubmittingPlan(true);
+    setSubmitError(null);
+    setSubmitSuccess(null);
+
+    try {
+      await onSubmit();
+      console.log('PlanReviewTable: Plan submitted successfully');
+      setSubmitSuccess('Plan submitted successfully!');
+    } catch (error: any) {
+      console.error('PlanReviewTable: Plan submission failed:', error);
+      setSubmitError(error.message || 'Failed to submit plan');
+    } finally {
+      setIsSubmittingPlan(false);
+    }
+  };
 
   // PRODUCTION-SAFE: Convert objectives to table rows format with comprehensive error handling
   const convertObjectivesToTableRows = (objectives: StrategicObjective[]) => {
@@ -861,39 +905,6 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
     return tableRows;
   };
 
-  // PRODUCTION-SAFE: Calculate totals with the new method
-  const budgetTotals = calculateTotals();
-
-  const formatCurrency = (amount: number): string => {
-    return `$${amount.toLocaleString()}`;
-  };
-
-  const formatDate = (dateString: string): string => {
-    try {
-      return new Date(dateString).toLocaleDateString();
-    } catch (e) {
-      return dateString;
-    }
-  };
-
-  const handleSubmitPlan = async () => {
-    console.log('PlanReviewTable: Submitting plan...');
-    setIsSubmittingPlan(true);
-    setSubmitError(null);
-    setSubmitSuccess(null);
-
-    try {
-      await onSubmit();
-      console.log('PlanReviewTable: Plan submitted successfully');
-      setSubmitSuccess('Plan submitted successfully!');
-    } catch (error: any) {
-      console.error('PlanReviewTable: Plan submission failed:', error);
-      setSubmitError(error.message || 'Failed to submit plan');
-    } finally {
-      setIsSubmittingPlan(false);
-    }
-  };
-
   const handleExportExcel = () => {
     if (!processedObjectives || processedObjectives.length === 0) {
       console.error('PlanReviewTable: No objectives data available for export');
@@ -941,6 +952,9 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
       }
     );
   };
+
+  // PRODUCTION-SAFE: Calculate totals with the new method
+  const budgetTotals = calculateTotals();
 
   // Convert processed objectives to table rows
   const tableRows: any[] = [];
@@ -1229,10 +1243,10 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
         <div className="flex space-x-2">
           <button
             onClick={handleManualRefresh}
-            disabled={isRefreshingData}
+            disabled={isLoading}
             className="flex items-center px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50"
           >
-            {isRefreshingData ? (
+            {isLoading ? (
               <>
                 <Loader className="h-4 w-4 mr-2 animate-spin" />
                 Refreshing...
@@ -1291,10 +1305,10 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
           </p>
           <button
             onClick={handleManualRefresh}
-            disabled={isProcessing}
+            disabled={isLoading}
             className="mt-4 px-4 py-2 bg-yellow-100 text-yellow-700 rounded-md hover:bg-yellow-200 disabled:opacity-50"
           >
-            {isProcessing ? 'Processing...' : 'Refresh Data'}
+            {isLoading ? 'Processing...' : 'Refresh Data'}
           </button>
         </div>
       ) : (
@@ -1514,6 +1528,35 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
                   Funding Gap: {formatCurrency(budgetTotals.total - (budgetTotals.governmentTotal + budgetTotals.partnersTotal + budgetTotals.sdgTotal + budgetTotals.otherTotal))}
                 </span>
               </div>
+            </div>
+          )}
+          
+          {/* PERFORMANCE: Quick summary stats */}
+          <div className="mt-4 grid grid-cols-3 gap-4 text-center text-xs text-gray-500">
+            <div>Total Budget: ${totalBudget.toLocaleString()}</div>
+            <div>Total Funding: ${totalFunding.toLocaleString()}</div>
+            <div>Funding Gap: ${fundingGap.toLocaleString()}</div>
+          </div>
+
+          {!isPreviewMode && !isViewOnly && (
+            <div className="flex justify-end mt-6">
+              <button
+                onClick={handleSubmitPlan}
+                disabled={isSubmitting || isSubmittingPlan || tableRows.length === 0}
+                className="inline-flex items-center px-6 py-3 border border-transparent rounded-md shadow-sm text-base font-medium text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50"
+              >
+                {isSubmitting || isSubmittingPlan ? (
+                  <>
+                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
+                    Submitting...
+                  </>
+                ) : (
+                  <>
+                    <Send className="h-5 w-5 mr-2" />
+                    Submit Plan for Review ({tableRows.length} items)
+                  </>
+                )}
+              </button>
             </div>
           )}
         </div>
