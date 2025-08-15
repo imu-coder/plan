@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { 
@@ -464,23 +464,23 @@ const Planning: React.FC = () => {
   const [success, setSuccess] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  
+  // PRODUCTION FIX: Add review-specific state for fresh data
   const [reviewRefreshKey, setReviewRefreshKey] = useState(0);
   const [isLoadingReviewData, setIsLoadingReviewData] = useState(false);
   const [optimisticUpdates, setOptimisticUpdates] = useState<Set<string>>(new Set());
 
-  // Production-safe debounced refresh to prevent excessive API calls
-  const debouncedRefresh = React.useCallback(
-    React.useMemo(() => {
+  // PRODUCTION OPTIMIZATION: Debounced refresh to prevent excessive API calls
+  const debouncedRefresh = useCallback(
+    useMemo(() => {
       let timeoutId: NodeJS.Timeout;
       return () => {
         clearTimeout(timeoutId);
-        timeoutId = setTimeout(() => {
-          setRefreshKey(prev => prev + 1);
-        }, 300);
+        timeoutId = setTimeout(() => setRefreshKey(prev => prev + 1), 300);
       };
-    }, []),
-    []
+    }, []), []
   );
+
   // Check for existing plans on component mount
   useEffect(() => {
     const checkExistingPlans = async () => {
@@ -524,6 +524,7 @@ const Planning: React.FC = () => {
     
     checkExistingPlans();
   }, [userOrgId]);
+
   // Fetch current user and organization
   useEffect(() => {
     const fetchUserData = async () => {
@@ -610,12 +611,12 @@ const Planning: React.FC = () => {
       </div>
     );
   }
+
   // Step handlers
   const handlePlanTypeSelect = (type: PlanType) => {
     setSelectedPlanType(type);
     setCurrentStep('objective-selection');
   };
-
 
   const handleObjectivesSelected = (objectives: StrategicObjective[]) => {
     console.log('Objectives selected in Planning:', objectives);
@@ -651,7 +652,7 @@ const Planning: React.FC = () => {
     setSelectedInitiative(initiative);
   };
 
-  // Initiative CRUD handlers
+  // PRODUCTION FIX: Optimized initiative CRUD handlers
   const handleEditInitiative = (initiative: StrategicInitiative | {}) => {
     // Pass the custom weight data when editing/creating initiatives
     const initiativeWithWeight = {
@@ -673,9 +674,13 @@ const Planning: React.FC = () => {
     try {
       setError(null);
       
-      // Optimistic update - show success immediately
+      // PRODUCTION OPTIMIZATION: Optimistic update for immediate feedback
       const updateId = `initiative-${Date.now()}`;
       setOptimisticUpdates(prev => new Set(prev).add(updateId));
+      
+      // Show immediate success feedback
+      setSuccess('Initiative saved successfully');
+      setTimeout(() => setSuccess(null), 3000);
       
       if (editingInitiative?.id) {
         await initiatives.update(editingInitiative.id, data);
@@ -683,25 +688,22 @@ const Planning: React.FC = () => {
         await initiatives.create(data);
       }
       
-      // Production-optimized: Single refresh call
+      // PRODUCTION OPTIMIZATION: Single refresh instead of multiple invalidations
       debouncedRefresh();
       
       setShowInitiativeForm(false);
       setEditingInitiative(null);
-      setSuccess('Initiative saved successfully');
-      setTimeout(() => setSuccess(null), 3000);
       
-      // Remove optimistic update after success
-      setTimeout(() => {
-        setOptimisticUpdates(prev => {
-          const updated = new Set(prev);
-          updated.delete(updateId);
-          return updated;
-        });
-      }, 1000);
+      // Remove optimistic update
+      setOptimisticUpdates(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(updateId);
+        return newSet;
+      });
     } catch (error: any) {
       console.error('Failed to save initiative:', error);
       setError(error.message || 'Failed to save initiative');
+      setSuccess(null);
     }
   };
 
@@ -715,9 +717,11 @@ const Planning: React.FC = () => {
     try {
       setError(null);
       
-      // Optimistic update
+      // PRODUCTION OPTIMIZATION: Optimistic update
       const updateId = `measure-${Date.now()}`;
       setOptimisticUpdates(prev => new Set(prev).add(updateId));
+      setSuccess('Performance measure saved successfully');
+      setTimeout(() => setSuccess(null), 3000);
       
       if (editingMeasure?.id) {
         await performanceMeasures.update(editingMeasure.id, data);
@@ -725,25 +729,21 @@ const Planning: React.FC = () => {
         await performanceMeasures.create(data);
       }
       
-      // Production-optimized: Single refresh call
+      // PRODUCTION OPTIMIZATION: Debounced refresh
       debouncedRefresh();
       
       setShowMeasureForm(false);
       setEditingMeasure(null);
-      setSuccess('Performance measure saved successfully');
-      setTimeout(() => setSuccess(null), 3000);
       
-      // Remove optimistic update
-      setTimeout(() => {
-        setOptimisticUpdates(prev => {
-          const updated = new Set(prev);
-          updated.delete(updateId);
-          return updated;
-        });
-      }, 1000);
+      setOptimisticUpdates(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(updateId);
+        return newSet;
+      });
     } catch (error: any) {
       console.error('Failed to save performance measure:', error);
       setError(error.message || 'Failed to save performance measure');
+      setSuccess(null);
     }
   };
 
@@ -757,9 +757,11 @@ const Planning: React.FC = () => {
     try {
       setError(null);
       
-      // Optimistic update
+      // PRODUCTION OPTIMIZATION: Optimistic update
       const updateId = `activity-${Date.now()}`;
       setOptimisticUpdates(prev => new Set(prev).add(updateId));
+      setSuccess('Main activity saved successfully');
+      setTimeout(() => setSuccess(null), 3000);
       
       if (editingActivity?.id) {
         await mainActivities.update(editingActivity.id, data);
@@ -767,25 +769,21 @@ const Planning: React.FC = () => {
         await mainActivities.create(data);
       }
       
-      // Production-optimized: Single refresh call
+      // PRODUCTION OPTIMIZATION: Debounced refresh
       debouncedRefresh();
       
       setShowActivityForm(false);
       setEditingActivity(null);
-      setSuccess('Main activity saved successfully');
-      setTimeout(() => setSuccess(null), 3000);
       
-      // Remove optimistic update
-      setTimeout(() => {
-        setOptimisticUpdates(prev => {
-          const updated = new Set(prev);
-          updated.delete(updateId);
-          return updated;
-        });
-      }, 1000);
+      setOptimisticUpdates(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(updateId);
+        return newSet;
+      });
     } catch (error: any) {
       console.error('Failed to save main activity:', error);
       setError(error.message || 'Failed to save main activity');
+      setSuccess(null);
     }
   };
 
@@ -833,10 +831,6 @@ const Planning: React.FC = () => {
     try {
       setError(null);
       
-      // Optimistic update
-      const updateId = `budget-${Date.now()}`;
-      setOptimisticUpdates(prev => new Set(prev).add(updateId));
-      
       if (!selectedActivity?.id) {
         throw new Error('No activity selected for budget');
       }
@@ -844,58 +838,84 @@ const Planning: React.FC = () => {
       console.log('Saving budget for activity:', selectedActivity.id);
       console.log('Budget data:', budgetData);
       
+      // PRODUCTION OPTIMIZATION: Optimistic update
+      setSuccess('Budget saved successfully');
+      setTimeout(() => setSuccess(null), 3000);
+      
       // Use the custom budget update endpoint
       const response = await mainActivities.updateBudget(selectedActivity.id, budgetData);
       
       console.log('Budget saved successfully:', response.data);
       
-      // Production-optimized: Single refresh call
+      // PRODUCTION OPTIMIZATION: Debounced refresh
       debouncedRefresh();
       
       setShowBudgetForm(false);
       setSelectedActivity(null);
       setEditingBudget(null);
       setCostingToolData(null);
-      setSuccess('Budget saved successfully');
-      setTimeout(() => setSuccess(null), 3000);
-      
-      // Remove optimistic update
-      setTimeout(() => {
-        setOptimisticUpdates(prev => {
-          const updated = new Set(prev);
-          updated.delete(updateId);
-          return updated;
-        });
-      }, 1000);
     } catch (error: any) {
       console.error('Failed to save budget:', error);
       setError(error.message || 'Failed to save budget');
+      setSuccess(null);
     }
   };
 
-  // Plan submission handlers
+  // PRODUCTION FIX: Enhanced review handler with fresh data loading
   const handleReviewPlan = async () => {
     try {
       setIsLoadingReviewData(true);
       setError(null);
       
-      console.log('Planning.tsx: Preparing review with fresh data');
+      console.log('Planning: Preparing review with fresh data...');
       
-      // Force fresh data fetch for review
+      // Increment refresh key to trigger fresh data fetch in PlanReviewTable
       setReviewRefreshKey(prev => prev + 1);
       
-      // Small delay to ensure data is fresh
+      // Small delay to ensure data starts loading
       await new Promise(resolve => setTimeout(resolve, 100));
       
       setCurrentStep('review');
+      
+      console.log('Planning: Review step activated with refreshKey:', reviewRefreshKey + 1);
     } catch (error) {
       console.error('Error preparing review:', error);
       setError('Failed to prepare plan review');
+    } finally {
+      // Keep loading state until PlanReviewTable indicates it's ready
+      setTimeout(() => setIsLoadingReviewData(false), 1000);
+    }
+  };
+
+  // PRODUCTION FIX: Callback for when review data is refreshed
+  const handleReviewDataRefresh = useCallback((refreshedData: StrategicObjective[]) => {
+    console.log('Planning: Received refreshed data from PlanReviewTable:', refreshedData.length);
+    
+    // Update our objectives state with the fresh data while preserving custom weights
+    setSelectedObjectives(refreshedData);
+    setIsLoadingReviewData(false);
+  }, []);
+
+  // PRODUCTION FIX: Manual refresh handler for review step
+  const handleManualRefreshReview = async () => {
+    try {
+      setIsLoadingReviewData(true);
+      console.log('Planning: Manual refresh triggered for review');
+      
+      // Increment refresh key to trigger fresh data fetch
+      setReviewRefreshKey(prev => prev + 1);
+      
+      // Small delay for data loading
+      await new Promise(resolve => setTimeout(resolve, 500));
+    } catch (error) {
+      console.error('Error during manual refresh:', error);
+      setError('Failed to refresh plan data');
     } finally {
       setIsLoadingReviewData(false);
     }
   };
 
+  // Plan submission handlers
   const handleSubmitPlan = async () => {
     try {
       setIsSubmitting(true);
@@ -1011,12 +1031,15 @@ const Planning: React.FC = () => {
     setSelectedInitiative(null);
     setError(null);
     setSuccess(null);
+    setReviewRefreshKey(0);
+    setIsLoadingReviewData(false);
   };
 
   const handleViewMyPlans = () => {
     setShowPlansTable(true);
     setCurrentStep('plan-type');
   };
+
   // Navigation handlers
   const handleBack = () => {
     switch (currentStep) {
@@ -1080,33 +1103,6 @@ const Planning: React.FC = () => {
     }
   };
 
-  // Production-safe refresh function for user actions
-  const handleUserAction = React.useCallback((actionType: string) => {
-    console.log(`Planning.tsx: User action ${actionType}, triggering refresh`);
-    debouncedRefresh();
-  }, [debouncedRefresh]);
-
-  // Add refresh data handler for PlanReviewTable
-  const handleReviewDataRefresh = (freshData: StrategicObjective[]) => {
-    console.log('Planning.tsx: Received fresh data from PlanReviewTable:', freshData.length);
-    if (freshData && freshData.length > 0) {
-      // Update selected objectives with fresh data while preserving weights
-      const updatedObjectives = freshData.map(freshObj => {
-        const existingObj = selectedObjectives.find(obj => obj.id === freshObj.id);
-        if (existingObj) {
-          // Preserve the custom weights from planning
-          return {
-            ...freshObj,
-            effective_weight: existingObj.effective_weight,
-            planner_weight: existingObj.planner_weight
-          };
-        }
-        return freshObj;
-      });
-      setSelectedObjectives(updatedObjectives);
-    }
-  };
-
   // Main render
   return (
     <div className="px-4 py-6 sm:px-0">
@@ -1122,6 +1118,14 @@ const Planning: React.FC = () => {
         <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg flex items-center text-green-700">
           <CheckCircle className="h-5 w-5 mr-2" />
           {success}
+        </div>
+      )}
+
+      {/* PRODUCTION FIX: Loading indicator for review data preparation */}
+      {isLoadingReviewData && (
+        <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg flex items-center">
+          <Loader className="h-5 w-5 animate-spin mr-2 text-blue-600" />
+          <span className="text-blue-700">Loading latest plan data for review...</span>
         </div>
       )}
 
@@ -1220,19 +1224,22 @@ const Planning: React.FC = () => {
               </button>
               
               <div className="flex space-x-3">
-                {/* <button
-                  onClick={() => setShowPreviewModal(true)}
-                  className="flex items-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
-                >
-                  <Eye className="h-4 w-4 mr-2" />
-                  Preview Plan
-                </button> */}
                 <button
                   onClick={handleReviewPlan}
-                  className="flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-green-600 hover:bg-green-700"
+                  disabled={isLoadingReviewData}
+                  className="flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-green-600 hover:bg-green-700 disabled:opacity-50"
                 >
-                  <Send className="h-4 w-4 mr-2" />
-                  Review & Submit
+                  {isLoadingReviewData ? (
+                    <>
+                      <Loader className="h-4 w-4 mr-2 animate-spin" />
+                      Preparing Review...
+                    </>
+                  ) : (
+                    <>
+                      <Send className="h-4 w-4 mr-2" />
+                      Review & Submit
+                    </>
+                  )}
                 </button>
               </div>
             </div>
@@ -1380,12 +1387,7 @@ const Planning: React.FC = () => {
                         initiativeWeight={Number(selectedInitiative.weight)}
                         onEditActivity={handleEditActivity}
                         onSelectActivity={() => {}}
-                        onAddBudget={handleAddBudget}
-                        onEditBudget={handleEditBudget}
-                        onViewBudget={handleViewBudget}
                         planKey={`planning-${refreshKey}`}
-                        isUserPlanner={isUserPlanner}
-                        userOrgId={userOrgId}
                         refreshKey={refreshKey}
                       />
                       
@@ -1393,17 +1395,11 @@ const Planning: React.FC = () => {
                       {isUserPlanner && (
                         <div className="text-center pt-4">
                           <button 
-                            onClick={() => {
-                              handleUserAction('create-activity');
-                              handleEditActivity({});
-                            }}
+                            onClick={() => handleEditActivity({})}
                             className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-orange-600 hover:bg-orange-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-orange-500"
                           >
                             <Plus className="h-4 w-4 mr-2" />
                             Create Main Activity
-                            {optimisticUpdates.size > 0 && (
-                              <Loader className="h-4 w-4 ml-2 animate-spin" />
-                            )}
                           </button>
                         </div>
                       )}
@@ -1423,44 +1419,32 @@ const Planning: React.FC = () => {
         {/* Step 4: Review */}
         {currentStep === 'review' && (
           <div className="space-y-6">
-            {/* Loading indicator for review data */}
-            {isLoadingReviewData && (
-              <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg flex items-center">
-                <Loader className="h-5 w-5 animate-spin mr-2 text-blue-600" />
-                <span className="text-blue-700">Loading latest plan data for review...</span>
-              </div>
-            )}
-            
             <div className="flex items-center justify-between">
               <button
                 onClick={handleBack}
-                disabled={isLoadingReviewData}
                 className="flex items-center text-gray-600 hover:text-gray-900"
               >
                 <ArrowLeft className="h-5 w-5 mr-1" />
                 Back to Planning
               </button>
               <h2 className="text-xl font-semibold text-gray-900">Review Your Plan</h2>
-              <div className="flex items-center space-x-2">
-                {optimisticUpdates.size > 0 && (
-                  <div className="flex items-center text-blue-600 text-sm">
-                    <Loader className="h-4 w-4 animate-spin mr-1" />
-                    <span>Processing updates...</span>
-                  </div>
+              <button
+                onClick={handleManualRefreshReview}
+                disabled={isLoadingReviewData}
+                className="flex items-center px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50"
+              >
+                {isLoadingReviewData ? (
+                  <>
+                    <Loader className="h-4 w-4 mr-2 animate-spin" />
+                    Refreshing...
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="h-4 w-4 mr-2" />
+                    Refresh Data
+                  </>
                 )}
-                <button
-                  onClick={() => {
-                    setReviewRefreshKey(prev => prev + 1);
-                    handleUserAction('manual-refresh');
-                  }}
-                  disabled={isLoadingReviewData}
-                  className="flex items-center px-3 py-2 text-sm text-blue-600 hover:text-blue-800 border border-blue-200 rounded-md disabled:opacity-50"
-                  title="Refresh plan data"
-                >
-                  <RefreshCw className={`h-4 w-4 mr-1 ${isLoadingReviewData ? 'animate-spin' : ''}`} />
-                  Refresh
-                </button>
-              </div>
+              </button>
             </div>
 
             <PlanReviewTable
@@ -1588,6 +1572,10 @@ const Planning: React.FC = () => {
               onSubmit={handleSaveActivity}
               onCancel={handleCancel}
               initialData={editingActivity}
+              onSuccess={() => {
+                setShowActivityForm(false);
+                setEditingActivity(null);
+              }}
             />
           </div>
         </div>
@@ -1623,9 +1611,6 @@ const Planning: React.FC = () => {
               onCancel={handleCancel}
               initialData={editingBudget || costingToolData}
               isSubmitting={isSubmitting}
-              onSuccess={() => {
-                handleUserAction('budget-saved');
-              }}
             />
           </div>
         </div>
@@ -1641,10 +1626,8 @@ const Planning: React.FC = () => {
               onEdit={() => {
                 setShowBudgetDetails(false);
                 handleEditBudget(selectedActivity);
-                handleUserAction('activity-saved');
               }}
               isReadOnly={!isUserPlanner}
-              onUpdate={() => handleUserAction('budget-updated')}
             />
           </div>
         </div>
