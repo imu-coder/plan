@@ -468,6 +468,14 @@ const Planning: React.FC = () => {
   const [isLoadingReviewData, setIsLoadingReviewData] = useState(false);
   const [optimisticUpdates, setOptimisticUpdates] = useState<Set<string>>(new Set());
 
+  // Simple debounced refresh without nested hooks
+  const triggerRefresh = () => {
+    setTimeout(() => setRefreshKey(prev => prev + 1), 300);
+  };
+  const [reviewRefreshKey, setReviewRefreshKey] = useState(0);
+  const [isLoadingReviewData, setIsLoadingReviewData] = useState(false);
+  const [optimisticUpdates, setOptimisticUpdates] = useState<Set<string>>(new Set());
+
   // Production-safe debounced refresh to prevent excessive API calls
   const debouncedRefresh = React.useCallback(
     React.useMemo(() => {
@@ -636,21 +644,6 @@ const Planning: React.FC = () => {
     console.log('Objective selected:', objective);
     setSelectedObjective(objective);
     setSelectedProgram(null);
-    setSelectedInitiative(null);
-  };
-
-  const handleSelectProgram = (program: Program) => {
-    console.log('Program selected:', program);
-    setSelectedProgram(program);
-    setSelectedObjective(null);
-    setSelectedInitiative(null);
-  };
-
-  const handleSelectInitiative = (initiative: StrategicInitiative) => {
-    console.log('Initiative selected:', initiative);
-    setSelectedInitiative(initiative);
-  };
-
   // Initiative CRUD handlers
   const handleEditInitiative = (initiative: StrategicInitiative | {}) => {
     // Pass the custom weight data when editing/creating initiatives
@@ -684,7 +677,7 @@ const Planning: React.FC = () => {
       }
       
       // Production-optimized: Single refresh call
-      debouncedRefresh();
+      triggerRefresh();
       
       setShowInitiativeForm(false);
       setEditingInitiative(null);
@@ -726,7 +719,7 @@ const Planning: React.FC = () => {
       }
       
       // Production-optimized: Single refresh call
-      debouncedRefresh();
+      triggerRefresh();
       
       setShowMeasureForm(false);
       setEditingMeasure(null);
@@ -768,7 +761,7 @@ const Planning: React.FC = () => {
       }
       
       // Production-optimized: Single refresh call
-      debouncedRefresh();
+      triggerRefresh();
       
       setShowActivityForm(false);
       setEditingActivity(null);
@@ -850,7 +843,7 @@ const Planning: React.FC = () => {
       console.log('Budget saved successfully:', response.data);
       
       // Production-optimized: Single refresh call
-      debouncedRefresh();
+      triggerRefresh();
       
       setShowBudgetForm(false);
       setSelectedActivity(null);
@@ -875,6 +868,12 @@ const Planning: React.FC = () => {
 
   // Plan submission handlers
   const handleReviewPlan = async () => {
+    setIsLoadingReviewData(true);
+    setReviewRefreshKey(prev => prev + 1);
+    
+    // Small delay to ensure fresh data is loaded
+    await new Promise(resolve => setTimeout(resolve, 100));
+    setIsLoadingReviewData(false);
     try {
       setIsLoadingReviewData(true);
       setError(null);
@@ -894,6 +893,19 @@ const Planning: React.FC = () => {
     } finally {
       setIsLoadingReviewData(false);
     }
+  };
+
+  const handleReviewDataRefresh = (refreshedData: StrategicObjective[]) => {
+    console.log('Fresh data received for review:', refreshedData.length, 'objectives');
+    // Update selectedObjectives with fresh data while preserving custom weights
+    setSelectedObjectives(refreshedData);
+  };
+
+  const handleManualRefreshReview = async () => {
+    setIsLoadingReviewData(true);
+    setReviewRefreshKey(prev => prev + 1);
+    await new Promise(resolve => setTimeout(resolve, 500));
+    setIsLoadingReviewData(false);
   };
 
   const handleSubmitPlan = async () => {
@@ -1463,6 +1475,28 @@ const Planning: React.FC = () => {
               </div>
             </div>
 
+            {isLoadingReviewData && (
+              <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg flex items-center">
+                <Loader className="h-5 w-5 animate-spin mr-2 text-blue-600" />
+                <span className="text-blue-700">Loading latest plan data for review...</span>
+              </div>
+            )}
+
+            <div className="mb-4 flex justify-end">
+              <button
+                onClick={handleManualRefreshReview}
+                disabled={isLoadingReviewData}
+                className="flex items-center px-3 py-2 text-sm text-blue-600 hover:text-blue-800 border border-blue-200 rounded-md disabled:opacity-50"
+              >
+                {isLoadingReviewData ? (
+                  <Loader className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                )}
+                Refresh Plan Data
+              </button>
+            </div>
+
             <PlanReviewTable
               objectives={selectedObjectives}
               onSubmit={handleSubmitPlan}
@@ -1473,6 +1507,9 @@ const Planning: React.FC = () => {
               toDate={toDate}
               planType={selectedPlanType}
               userOrgId={userOrgId}
+              refreshKey={reviewRefreshKey}
+              onDataRefresh={handleReviewDataRefresh}
+              isLoadingReview={isLoadingReviewData}
               refreshKey={reviewRefreshKey}
               onDataRefresh={handleReviewDataRefresh}
               isLoadingReview={isLoadingReviewData}
