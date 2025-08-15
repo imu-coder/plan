@@ -142,12 +142,12 @@ class MainActivityAdmin(admin.ModelAdmin):
 
 @admin.register(ActivityBudget)
 class ActivityBudgetAdmin(admin.ModelAdmin):
-    list_display = ('activity', 'budget_calculation_type', 'activity_type', 'created_at')
+    list_display = ('get_activity_name', 'budget_calculation_type', 'activity_type', 'get_estimated_cost', 'created_at')
     list_filter = ('budget_calculation_type', 'activity_type')
-    search_fields = ('activity__name',)
+    search_fields = ('sub_activity__name', 'activity__name')
     fieldsets = (
         (None, {
-            'fields': ('activity', 'budget_calculation_type', 'activity_type')
+            'fields': ('sub_activity', 'activity', 'budget_calculation_type', 'activity_type')
         }),
         ('Costs', {
             'fields': (
@@ -159,11 +159,58 @@ class ActivityBudgetAdmin(admin.ModelAdmin):
                 'other_funding'
             ),
         }),
-        ('Training Details', {
-            'fields': ('training_details',),
+        ('Activity Details', {
+            'fields': (
+                'training_details',
+                'meeting_workshop_details',
+                'procurement_details',
+                'printing_details',
+                'supervision_details',
+                'partners_details'
+            ),
             'classes': ('collapse',),
         }),
     )
+    
+    def get_activity_name(self, obj):
+        """Get the activity name from either sub_activity or legacy activity"""
+        if obj.sub_activity:
+            return f"Sub-Activity: {obj.sub_activity.name}"
+        elif obj.activity:
+            return f"Main Activity: {obj.activity.name}"
+        else:
+            return "No Activity Assigned"
+    get_activity_name.short_description = 'Activity'
+    get_activity_name.admin_order_field = 'sub_activity__name'
+    
+    def get_estimated_cost(self, obj):
+        """Get the effective estimated cost based on calculation type"""
+        if obj.budget_calculation_type == 'WITH_TOOL':
+            return f"ETB {obj.estimated_cost_with_tool:,.2f}"
+        else:
+            return f"ETB {obj.estimated_cost_without_tool:,.2f}"
+    get_estimated_cost.short_description = 'Estimated Cost'
+    
+    def get_queryset(self, request):
+        """Optimize queryset to prevent N+1 queries"""
+        return super().get_queryset(request).select_related(
+            'sub_activity', 
+            'activity',
+            'sub_activity__main_activity',
+            'activity__initiative'
+        )
+    
+    def has_view_permission(self, request, obj=None):
+        return True
+    
+    def has_change_permission(self, request, obj=None):
+        return True
+    
+    def has_delete_permission(self, request, obj=None):
+        return True
+    
+    def has_add_permission(self, request):
+        return True</parameter>
 
 @admin.register(ActivityCostingAssumption)
 class ActivityCostingAssumptionAdmin(admin.ModelAdmin):
