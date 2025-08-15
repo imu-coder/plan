@@ -211,35 +211,32 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
 
     console.log('MainActivityList: Raw activities from API:', activitiesList.data.length);
     
-    // PRODUCTION-SAFE: Ultra-permissive filtering to prevent data loss
+    // PRODUCTION-SAFE: Proper organization filtering for main activities
     const filtered = activitiesList.data.filter(activity => {
       if (!activity) {
         console.log('MainActivityList: Skipping null activity');
         return false;
       }
       
-      // Ultra-permissive organization matching
-      const hasNoOrg = !activity.organization || 
-                       activity.organization === null || 
-                       activity.organization === '' ||
-                       activity.organization === 'null' ||
-                       activity.organization === undefined ||
-                       activity.organization === 0;
-                       
+      // Check if this is a default activity (available to all)
+      const isDefault = activity.is_default === true;
+      
+      // Check if activity has no organization (legacy data)
+      const hasNoOrg = !activity.organization || activity.organization === null;
+      
+      // Check if activity belongs to user's organization
       const belongsToUserOrg = userOrgId && activity.organization && 
                               Number(activity.organization) === Number(userOrgId);
       
-      // Also check organization_name as backup
-      const hasOrgName = activity.organization_name === organizationName;
+      // Include if: default, no org (legacy), or belongs to user's org
+      const shouldInclude = isDefault || hasNoOrg || belongsToUserOrg;
       
-      const shouldInclude = hasNoOrg || belongsToUserOrg || hasOrgName;
-      
-      console.log(`MainActivityList: Activity "${activity.name}" - org:${activity.organization}, userOrg:${userOrgId}, orgName:${activity.organization_name}, include:${shouldInclude}`);
+      console.log(`MainActivityList: Activity "${activity.name}" - isDefault:${isDefault}, org:${activity.organization}, userOrg:${userOrgId}, include:${shouldInclude}`);
       
       return shouldInclude;
     });
     
-    console.log(`MainActivityList: Filtered ${activitiesList.data.length} total to ${filtered.length} for user org`);
+    console.log(`MainActivityList: Filtered ${activitiesList.data.length} total to ${filtered.length} for user org ${userOrgId}`);
     
     return filtered;
   }, [activitiesList?.data, userOrgId]);

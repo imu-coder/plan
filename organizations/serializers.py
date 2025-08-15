@@ -94,18 +94,68 @@ class StrategicInitiativeSerializer(serializers.ModelSerializer):
         ]
 
     def get_performance_measures(self, obj):
+        # Filter performance measures by request user's organization
         measures = obj.performance_measures.all()
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            user_org = getattr(request.user, 'organization_users', None)
+            if user_org and hasattr(user_org, 'first'):
+                user_org_instance = user_org.first()
+                if user_org_instance:
+                    user_org_id = user_org_instance.organization_id
+                    measures = measures.filter(
+                        models.Q(organization__isnull=True) | 
+                        models.Q(organization=user_org_id)
+                    )
         return PerformanceMeasureSerializer(measures, many=True).data
 
     def get_main_activities(self, obj):
+        # Filter main activities by request user's organization  
         activities = obj.main_activities.all()
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            user_org = getattr(request.user, 'organization_users', None)
+            if user_org and hasattr(user_org, 'first'):
+                user_org_instance = user_org.first()
+                if user_org_instance:
+                    user_org_id = user_org_instance.organization_id
+                    activities = activities.filter(
+                        models.Q(organization__isnull=True) | 
+                        models.Q(organization=user_org_id)
+                    )
         return MainActivitySerializer(activities, many=True, context=self.context).data
 
     def get_total_measures_weight(self, obj):
-        return sum(measure.weight for measure in obj.performance_measures.all())
+        # Calculate weight only for user's organization measures
+        measures = obj.performance_measures.all()
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            user_org = getattr(request.user, 'organization_users', None)
+            if user_org and hasattr(user_org, 'first'):
+                user_org_instance = user_org.first()
+                if user_org_instance:
+                    user_org_id = user_org_instance.organization_id
+                    measures = measures.filter(
+                        models.Q(organization__isnull=True) | 
+                        models.Q(organization=user_org_id)
+                    )
+        return sum(measure.weight for measure in measures)
 
     def get_total_activities_weight(self, obj):
-        return sum(activity.weight for activity in obj.main_activities.all())
+        # Calculate weight only for user's organization activities
+        activities = obj.main_activities.all()
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            user_org = getattr(request.user, 'organization_users', None)
+            if user_org and hasattr(user_org, 'first'):
+                user_org_instance = user_org.first()
+                if user_org_instance:
+                    user_org_id = user_org_instance.organization_id
+                    activities = activities.filter(
+                        models.Q(organization__isnull=True) | 
+                        models.Q(organization=user_org_id)
+                    )
+        return sum(activity.weight for activity in activities)
 
 class PerformanceMeasureSerializer(serializers.ModelSerializer):
     organization_name = serializers.CharField(source='organization.name', read_only=True)

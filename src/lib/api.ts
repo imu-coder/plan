@@ -1108,7 +1108,47 @@ export const performanceMeasures = {
 // Main activities service
 export const mainActivities = {
   getAll: async () => {
-    console.log('API: Getting all main activities');
+  getByInitiative: async (initiativeId: string) => {
+    console.log(`API: Getting main activities for initiative: ${initiativeId}`);
+    
+    try {
+      // Add timeout and proper headers
+      const response = await api.get(`/main-activities/?initiative=${initiativeId}`, {
+        timeout: 10000,
+        headers: {
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache'
+        }
+      });
+      
+      console.log('API: Main activities response received:', {
+        status: response.status,
+        dataType: typeof response.data,
+        isArray: Array.isArray(response.data),
+        hasResults: response.data?.results ? 'yes' : 'no',
+        resultsLength: response.data?.results?.length || 'none',
+        dataLength: response.data?.length || 'none'
+      });
+      
+      // Handle different response formats
+      if (Array.isArray(response.data)) {
+        console.log('API: Using direct array format with', response.data.length, 'activities');
+        return { data: response.data };
+      } else if (response.data?.results && Array.isArray(response.data.results)) {
+        console.log('API: Using paginated format with', response.data.results.length, 'activities');
+        return { data: response.data.results };
+      } else if (response.data?.data && Array.isArray(response.data.data)) {
+        console.log('API: Using nested data format with', response.data.data.length, 'activities');
+        return { data: response.data.data };
+      } else {
+        console.warn('API: Unexpected response format for main activities:', response.data);
+        return { data: [] };
+      }
+    } catch (error) {
+      console.error('API: Error fetching main activities by initiative:', error);
+      throw error;
+    }
+  },
     const response = await api.get('/main-activities/');
     console.log('API: All main activities response:', response.data?.length || 0, 'items');
     return response.data;

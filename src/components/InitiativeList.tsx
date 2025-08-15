@@ -216,20 +216,41 @@ const InitiativeList: React.FC<InitiativeListProps> = ({
 
   // Calculate weight totals from actual initiatives data
   // CRITICAL FIX: Filter initiatives to show both default and user's organization initiatives
-  const filteredInitiatives = (initiativesList.data || []).filter(initiative => {
-    const isDefault = initiative.is_default === true;
-    const belongsToUserOrg = !initiative.organization || Number(initiative.organization) === Number(userOrgId);
-    const belongsToOtherOrg = initiative.organization && initiative.organization !== userOrgId;
+  const filteredInitiatives = React.useMemo(() => {
+    console.log('InitiativeList: Filtering initiatives for user org:', userOrgId);
     
-    // Include if it's default OR belongs to user's org, but exclude if it belongs to another org
-    const shouldInclude = (isDefault || belongsToUserOrg) && !belongsToOtherOrg;
-    
-    if (initiative.name) {
-      console.log(`Initiative "${initiative.name}": isDefault=${isDefault}, org=${initiative.organization}, userOrg=${userOrgId}, orgName=${initiative.organization_name || organizationsMap[String(initiative.organization)] || 'N/A'}, shouldInclude=${shouldInclude}`);
+    if (!initiativesList?.data || !Array.isArray(initiativesList.data)) {
+      console.log('InitiativeList: No initiatives data to filter');
+      return [];
     }
+
+    console.log('InitiativeList: Raw initiatives from API:', initiativesList.data.length);
     
-    return shouldInclude;
-  });
+    // PRODUCTION-SAFE: Proper organization filtering
+    const filtered = initiativesList.data.filter(initiative => {
+      if (!initiative) {
+        console.log('InitiativeList: Skipping null initiative');
+        return false;
+      }
+      
+      // Proper organization filtering
+      const isDefault = initiative.is_default === true;
+      const hasNoOrg = !initiative.organization || initiative.organization === null;
+      const belongsToUserOrg = userOrgId && initiative.organization && 
+                              Number(initiative.organization) === Number(userOrgId);
+      
+      // Include if: default initiative, no organization (legacy), or belongs to user's org
+      const shouldInclude = isDefault || hasNoOrg || belongsToUserOrg;
+      
+      console.log(`InitiativeList: Initiative "${initiative.name}" - isDefault:${isDefault}, org:${initiative.organization}, userOrg:${userOrgId}, include:${shouldInclude}`);
+      
+      return shouldInclude;
+    });
+    
+    console.log(`InitiativeList: Filtered ${initiativesList.data.length} total to ${filtered.length} for user org ${userOrgId}`);
+    
+    return filtered;
+  }, [initiativesList?.data, userOrgId]);
   
   // Ensure organization names are displayed correctly
   const enrichedInitiatives = filteredInitiatives.map(initiative => ({
