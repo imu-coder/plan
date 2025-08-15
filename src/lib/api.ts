@@ -1107,6 +1107,139 @@ export const performanceMeasures = {
 
 // Main activities service
 export const mainActivities = {
+  getAll: async () => {
+    console.log('API: Getting all main activities');
+    const response = await api.get('/main-activities/');
+    console.log('API: All main activities response:', response.data?.length || 0, 'items');
+    return response.data;
+  },
+
+  getById: async (id: string) => {
+    console.log('API: Getting main activity by ID:', id);
+    const response = await api.get(`/main-activities/${id}/`);
+    console.log('API: Main activity by ID response:', response.data);
+    return response.data;
+  },
+
+  getByInitiative: async (initiativeId: string) => {
+    console.log('API: Getting main activities for initiative:', initiativeId);
+    
+    if (!initiativeId) {
+      console.error('API: No initiative ID provided to getByInitiative');
+      throw new Error('Initiative ID is required');
+    }
+    
+    try {
+      // Try direct API call with proper error handling
+      const response = await api.get(`/main-activities/?initiative=${initiativeId}`, {
+        timeout: 10000, // 10 second timeout
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      console.log('API: Main activities response received:', {
+        status: response.status,
+        dataType: typeof response.data,
+        isArray: Array.isArray(response.data),
+        hasResults: response.data?.results ? 'yes' : 'no',
+        directDataLength: Array.isArray(response.data) ? response.data.length : 'not array',
+        resultsLength: response.data?.results ? response.data.results.length : 'no results'
+      });
+      
+      // Handle different response formats
+      let activitiesData = [];
+      
+      if (Array.isArray(response.data)) {
+        // Direct array format
+        activitiesData = response.data;
+        console.log('API: Using direct array format with', activitiesData.length, 'activities');
+      } else if (response.data && Array.isArray(response.data.results)) {
+        // Paginated format
+        activitiesData = response.data.results;
+        console.log('API: Using paginated format with', activitiesData.length, 'activities');
+      } else if (response.data && response.data.data && Array.isArray(response.data.data)) {
+        // Nested data format
+        activitiesData = response.data.data;
+        console.log('API: Using nested data format with', activitiesData.length, 'activities');
+      } else {
+        console.warn('API: Unexpected response format for main activities:', response.data);
+        activitiesData = [];
+      }
+      
+      // Filter for the specific initiative (extra safety)
+      const filteredData = activitiesData.filter(activity => 
+        activity && activity.initiative && String(activity.initiative) === String(initiativeId)
+      );
+      
+      console.log(`API: Filtered ${activitiesData.length} activities to ${filteredData.length} for initiative ${initiativeId}`);
+      
+      return {
+        data: filteredData,
+        total: filteredData.length,
+        success: true
+      };
+      
+    } catch (error) {
+      console.error('API: Failed to fetch main activities for initiative:', initiativeId, error);
+      
+      // Enhanced error information
+      const errorInfo = {
+        message: error.message,
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        url: error.config?.url,
+        method: error.config?.method
+      };
+      
+      console.error('API: Detailed error info:', errorInfo);
+      
+      // Throw specific error for better debugging
+      throw new Error(`Failed to fetch main activities for initiative ${initiativeId}: ${error.message}`);
+    }
+  },
+
+  create: async (data: any) => {
+    console.log('API: Creating main activity:', data);
+    const response = await api.post('/main-activities/', data);
+    console.log('API: Main activity created:', response.data);
+    return response.data;
+  },
+
+  update: async (id: string, data: any) => {
+    console.log('API: Updating main activity:', id, data);
+    const response = await api.put(`/main-activities/${id}/`, data);
+    console.log('API: Main activity updated:', response.data);
+    return response.data;
+  },
+
+  delete: async (id: string) => {
+    console.log('API: Deleting main activity:', id);
+    const response = await api.delete(`/main-activities/${id}/`);
+    console.log('API: Main activity deleted successfully');
+    return response.data;
+  },
+
+  // Add method to get activities with sub-activities populated
+  getByInitiativeWithSubActivities: async (initiativeId: string) => {
+    console.log('API: Getting main activities with sub-activities for initiative:', initiativeId);
+    
+    try {
+      const response = await api.get(`/main-activities/?initiative=${initiativeId}&include_sub_activities=true`);
+      
+      let activitiesData = response.data?.results || response.data || [];
+      if (!Array.isArray(activitiesData)) activitiesData = [];
+      
+      console.log(`API: Found ${activitiesData.length} activities with sub-activities`);
+      return { data: activitiesData };
+      
+    } catch (error) {
+      console.error('API: Failed to fetch activities with sub-activities:', error);
+      throw error;
+    }
+  },
+  
   async getByInitiative(initiativeId: string) {
     try {
       if (!initiativeId) {
