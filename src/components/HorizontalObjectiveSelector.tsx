@@ -100,9 +100,21 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
 
   // Mutation for updating objectives
   const updateObjectiveMutation = useMutation({
-    mutationFn: async (objective: Partial<StrategicObjective>) => {
-      if (!objective.id) throw new Error("Missing objective ID");
-      return objectives.update(objective.id.toString(), objective);
+    mutationFn: async (objectiveData: Partial<StrategicObjective>) => {
+      console.log('updateObjectiveMutation called with:', objectiveData);
+      
+      if (!objectiveData.id) {
+        console.error('Missing objective ID in mutation data:', objectiveData);
+        throw new Error("Missing objective ID");
+      }
+      
+      const objectiveId = objectiveData.id.toString();
+      console.log('Updating objective with ID:', objectiveId);
+      
+      // Create a clean data object without the ID (API doesn't expect ID in body)
+      const updateData = { ...objectiveData };
+      delete updateData.id;
+      
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['objectives'] });
@@ -136,9 +148,10 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
     let total = 0;
     
     selectedObjectives.forEach(obj => {
-      if (obj && obj.id) {
-        const weight = objectiveWeights[obj.id] !== undefined ? 
-                      objectiveWeights[obj.id] : 
+      if (obj && (obj.id || obj.id === 0)) {
+        const id = obj.id.toString();
+        const weight = objectiveWeights[id] !== undefined ? 
+                      objectiveWeights[id] : 
                       getEffectiveWeight(obj);
         total += Number(weight) || 0;
       }
@@ -164,7 +177,13 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
       setValidationError(null);
       
       const objectivesWithWeights = selectedObjectives.map(obj => {
-        const userSetWeight = objectiveWeights[obj.id];
+        if (!obj || (!obj.id && obj.id !== 0)) {
+          console.warn('Skipping objective without valid ID in callback:', obj);
+          return null;
+        }
+        
+        const id = obj.id.toString();
+        const userSetWeight = objectiveWeights[id];
         const originalEffectiveWeight = getEffectiveWeight(obj);
         const effectiveWeight = userSetWeight !== undefined ? userSetWeight : originalEffectiveWeight;
         
@@ -174,7 +193,7 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
           planner_weight: effectiveWeight,
           effective_weight: effectiveWeight
         };
-      });
+      }).filter(Boolean); // Remove null entries
       
       const currentDataString = JSON.stringify(objectivesWithWeights.map(obj => ({
         id: obj.id,
@@ -192,9 +211,13 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
 
   // Memoized handlers
   const handleSelectObjective = useCallback((objective: StrategicObjective) => {
-    if (!objective || !objective.id) return;
+    if (!objective || (!objective.id && objective.id !== 0)) {
+      console.warn('Cannot select objective without valid ID:', objective);
+      return;
+    }
     
-    const isSelected = selectedObjectives.some(obj => obj && obj.id === objective.id);
+    const objectiveId = objective.id.toString();
+    const isSelected = selectedObjectives.some(obj => obj && obj.id && obj.id.toString() === objectiveId);
     if (isSelected) return;
     
     const updatedObjectives = [...selectedObjectives, objective];
@@ -203,25 +226,27 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
     const effectiveWeight = getEffectiveWeight(objective);
     setObjectiveWeights(prev => ({
       ...prev,
-      [objective.id]: effectiveWeight
+      [objectiveId]: effectiveWeight
     }));
   }, [selectedObjectives]);
 
   const handleRemoveObjective = useCallback((objectiveId: number | string) => {
-    const updatedObjectives = selectedObjectives.filter(obj => obj && obj.id !== objectiveId);
+    const id = objectiveId.toString();
+    const updatedObjectives = selectedObjectives.filter(obj => obj && obj.id && obj.id.toString() !== id);
     setSelectedObjectives(updatedObjectives);
     
     setObjectiveWeights(prev => {
       const updated = { ...prev };
-      delete updated[objectiveId];
+      delete updated[id];
       return updated;
     });
   }, [selectedObjectives]);
 
   const handleWeightChange = useCallback((objectiveId: number | string, weight: number) => {
+    const id = objectiveId.toString();
     setObjectiveWeights(prev => ({
       ...prev,
-      [objectiveId]: weight
+      [id]: weight
     }));
   }, []);
 
@@ -232,8 +257,9 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
     const updatedWeights: Record<string, number> = {};
     
     selectedObjectives.forEach(obj => {
-      if (obj && obj.id) {
-        updatedWeights[obj.id] = equalWeight;
+      if (obj && (obj.id || obj.id === 0)) {
+        const id = obj.id.toString();
+        updatedWeights[id] = equalWeight;
       }
     });
     
@@ -262,16 +288,25 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
       const saveOperations = [];
       
       selectedObjectives.forEach(obj => {
-        if (!obj || !obj.id) return;
+        if (!obj || !obj.id) {
+          console.error('Skipping objective without ID:', obj);
+          return;
+        }
         
         const newWeight = objectiveWeights[obj.id];
-        if (newWeight === undefined) return;
+        if (newWeight === undefined) {
+          console.error('Skipping objective without weight:', obj.id, obj.title);
+          return;
+        }
+        
+        console.log('Processing objective for save:', { id: obj.id, title: obj.title, newWeight });
         
         if (obj.is_default) {
           saveOperations.push({
             type: 'update',
             id: obj.id,
             data: {
+              id: obj.id, // Ensure ID is included
               planner_weight: newWeight,
               title: obj.title,
               description: obj.description,
@@ -285,6 +320,7 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
             type: 'update',
             id: obj.id,
             data: {
+              id: obj.id, // Ensure ID is included
               weight: newWeight,
               planner_weight: null,
               title: obj.title,
@@ -295,6 +331,15 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
           });
         }
       });
+      
+      console.log('Save operations prepared:', saveOperations.length, 'operations');
+      
+      if (saveOperations.length === 0) {
+        setValidationError('No valid objectives to save');
+        setIsSavingWeights(false);
+        setSaveProgress(null);
+        return;
+      }
       
       // Execute updates in batches
       const BATCH_SIZE = 3;
@@ -311,9 +356,16 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
         
         const batchPromises = batch.map(async (operation) => {
           try {
+            console.log('Saving objective:', operation.id, operation.name, operation.data);
+            
+            // Validate the operation has required data
+            if (!operation.id || !operation.data) {
+              throw new Error(`Invalid operation data for ${operation.name}`);
+            }
+            
             return await updateObjectiveMutation.mutateAsync(operation.data);
           } catch (error) {
-            console.error(`Failed to update objective ${operation.name}:`, error);
+            console.error(`Failed to save objective ${operation.name} (ID: ${operation.id}):`, error);
             throw new Error(`Failed to save "${operation.name}": ${error.message}`);
           }
         });
@@ -496,12 +548,18 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
             {selectedObjectives.map(obj => {
               if (!obj || !obj.id) return null;
               
-              const effectiveWeight = objectiveWeights[obj.id] !== undefined ? 
-                                     objectiveWeights[obj.id] : 
+                      if (!obj || (!obj.id && obj.id !== 0)) {
+                        console.warn('Rendering objective without valid ID:', obj);
+                        return null;
+                      }
+                      
+                      const id = obj.id.toString();
+                      const effectiveWeight = objectiveWeights[id] !== undefined ? 
+                                             objectiveWeights[id] : 
                                      getEffectiveWeight(obj);
               
               return (
-                <div key={obj.id} className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                <div key={id} className="bg-gray-50 p-4 rounded-lg border border-gray-200">
                   <div className="flex justify-between items-start mb-3">
                     <div className="flex items-center flex-1">
                       <Target className="h-5 w-5 text-blue-600 mr-2 flex-shrink-0" />
@@ -516,7 +574,7 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
                       </div>
                     </div>
                     <button
-                      onClick={() => handleRemoveObjective(obj.id)}
+                      onClick={() => handleRemoveObjective(id)}
                       disabled={isSavingWeights}
                       className="p-1 text-red-600 hover:text-red-800 hover:bg-red-50 rounded-full ml-2 disabled:opacity-50"
                       aria-label="Remove objective"
@@ -537,7 +595,7 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
                         onClick={() => {
                           const currentWeight = effectiveWeight;
                           const newWeight = Math.max(0, parseFloat((currentWeight - 1).toFixed(1)));
-                          handleWeightChange(obj.id, newWeight);
+                          handleWeightChange(id, newWeight);
                         }}
                         disabled={isSavingWeights}
                         className="p-1 rounded-full bg-gray-100 hover:bg-gray-200 disabled:opacity-50"
@@ -550,7 +608,7 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
                         max="100"
                         step="0.1"
                         value={effectiveWeight}
-                        onChange={(e) => handleWeightChange(obj.id, Number(e.target.value))}
+                        onChange={(e) => handleWeightChange(id, Number(e.target.value))}
                         disabled={isSavingWeights}
                         className="block w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 text-center disabled:opacity-50"
                       />
@@ -559,7 +617,7 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
                         onClick={() => {
                           const currentWeight = effectiveWeight;
                           const newWeight = Math.min(100, parseFloat((currentWeight + 1).toFixed(1)));
-                          handleWeightChange(obj.id, newWeight);
+                          handleWeightChange(id, newWeight);
                         }}
                         disabled={isSavingWeights}
                         className="p-1 rounded-full bg-gray-100 hover:bg-gray-200 disabled:opacity-50"
@@ -590,7 +648,12 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {unselectedObjectives.map((objective: StrategicObjective) => {
-              if (!objective || !objective.id) return null;
+              if (!objective || (!objective.id && objective.id !== 0)) {
+                console.warn('Skipping unselected objective without valid ID:', objective);
+                return null;
+              }
+              
+              const id = objective.id.toString();
               
               const effectiveWeight = objective.planner_weight !== undefined && objective.planner_weight !== null
                 ? objective.planner_weight
@@ -598,7 +661,7 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
                 
               return (
                 <div 
-                  key={objective.id}
+                  key={id}
                   onClick={() => !isSavingWeights && handleSelectObjective(objective)}
                   className={`bg-white p-4 rounded-lg border border-gray-200 hover:border-blue-300 cursor-pointer transition-colors ${
                     isSavingWeights ? 'opacity-50 cursor-not-allowed' : ''
