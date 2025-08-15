@@ -336,51 +336,32 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
 
   return (
     <div className="space-y-6">
-      {/* Summary and Controls */}
-      <div className="bg-white p-4 rounded-lg border border-gray-200">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-lg font-semibold text-gray-900">Strategic Objectives Selection</h2>
-          <div className="text-sm text-gray-500">
-            {selectedObjectives.length} selected
-          </div>
-        </div>
-        
-        {/* Weight Summary */}
-        {selectedObjectives.length > 0 && (
-          <div className="mb-4 p-3 bg-gray-50 rounded-lg">
-            <div className="flex justify-between items-center mb-2">
-              <span className="text-sm font-medium text-gray-700">Total Weight:</span>
-              <span className={cn(
-                "text-sm font-semibold",
-                Math.abs(totalWeight - 100) < 0.01 ? "text-green-600" : "text-red-600"
-              )}>
-                {totalWeight.toFixed(2)}%
+      {/* Weight Summary and Controls */}
+      {selectedObjectives.length > 0 && (
+        <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center">
+              <Info className="h-5 w-5 text-blue-600 mr-2" />
+              <span className="text-blue-800 font-medium">
+                Total Weight: {totalWeight.toFixed(2)}% / 100%
               </span>
             </div>
-            
-            {/* Progress bar */}
-            <div className="w-full bg-gray-200 rounded-full h-2">
-              <div 
-                className={cn(
-                  "h-2 rounded-full transition-all duration-300",
-                  Math.abs(totalWeight - 100) < 0.01 ? "bg-green-500" : 
-                  totalWeight > 100 ? "bg-red-500" : "bg-blue-500"
-                )}
-                style={{ width: `${Math.min(totalWeight, 100)}%` }}
-              ></div>
-            </div>
-            
-            {validationError && (
-              <div className="mt-2 flex items-center text-sm text-red-600">
-                <AlertCircle className="h-4 w-4 mr-1" />
-                {validationError}
-              </div>
+            {Math.abs(totalWeight - 100) < 0.01 ? (
+              <CheckCircle className="h-5 w-5 text-green-600" />
+            ) : (
+              <AlertCircle className="h-5 w-5 text-orange-600" />
             )}
           </div>
-        )}
-        
-        {/* Action Buttons */}
-        {selectedObjectives.length > 0 && (
+          
+          {validationError && (
+            <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-md">
+              <div className="flex items-center">
+                <AlertCircle className="h-4 w-4 text-red-600 mr-2" />
+                <span className="text-red-800 text-sm">{validationError}</span>
+              </div>
+            </div>
+          )}
+          
           <div className="flex space-x-3">
             <button
               onClick={handleAutoDistribute}
@@ -407,8 +388,8 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
               )}
             </button>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Selected Objectives Section */}
       {selectedObjectives.length > 0 && (
