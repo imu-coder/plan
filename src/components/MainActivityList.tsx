@@ -99,9 +99,22 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
         const activities = Array.isArray(response.data) ? response.data : [];
         console.log(`MainActivityList: Successfully fetched ${activities.length} activities from API`);
         
-        // Enhanced logging for production debugging
+        // Log each activity for debugging
         activities.forEach((activity, index) => {
-          console.log(`Activity ${index + 1}: "${activity.name}" (ID: ${activity.id}, Org: ${activity.organization || 'none'}, SubActivities: ${activity.sub_activities?.length || 0})`);
+          console.log(`Activity ${index + 1}: "${activity.name}" (ID: ${activity.id}, Org: ${activity.organization || 'none'})`);
+        });
+        
+        if (!response) {
+          console.log('MainActivityList: No response from API');
+          return { data: [] };
+        }
+        
+        const activities2 = Array.isArray(response.data) ? response.data : [];
+        console.log(`MainActivityList: Processed ${activities2.length} activities from response`);
+        
+        // Log each activity for production debugging
+        activities2.forEach((activity, index) => {
+          console.log(`Activity ${index + 1}: "${activity.name}" (ID: ${activity.id}, Org: ${activity.organization || 'none'})`);
         });
         
         return response;
@@ -111,110 +124,131 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
       }
     },
     enabled: !!initiativeId && userOrgId !== null,
-    staleTime: 5 * 60 * 1000, // 5 minutes cache for production stability
-    cacheTime: 10 * 60 * 1000, // 10 minutes cache time
+    staleTime: 30000, // 30 seconds cache for production stability
     refetchOnWindowFocus: false,
     retry: 1,
-    refetchInterval: false
+    refetchInterval: false,
+    refetchOnReconnect: true
   });
 
-  // PRODUCTION FIX: Conservative refetch only when really needed
+  // PRODUCTION FIX: Refetch when initiative changes
   useEffect(() => {
-    // Only refetch if we have no data and both required params are available
-    if (initiativeId && userOrgId !== null && !activitiesList?.data) {
-      console.log('MainActivityList: No data available, triggering refetch');
+    if (initiativeId && userOrgId !== null) {
+      console.log('MainActivityList: Initiative or user org changed, refetching');
       refetch();
     }
-  }, [initiativeId, userOrgId, activitiesList?.data, refetch]);
+  }, [initiativeId, userOrgId, refetch]);
 
   // Create sub-activity mutation with immediate cache update
   const createSubActivityMutation = useMutation({
     mutationFn: (subActivityData: any) => subActivities.create(subActivityData),
-    onSuccess: (result) => {
+    onSuccess: (result, variables) => {
       console.log('Sub-activity created successfully:', result);
       
-      // PRODUCTION FIX: Optimistic update instead of full refetch
+      // PRODUCTION FIX: Optimistic cache update instead of refetch
       const queryKey = ['main-activities', initiativeId, userOrgId, refreshKey];
       const currentData = queryClient.getQueryData(queryKey);
       
       if (currentData?.data && Array.isArray(currentData.data)) {
-        // Find the main activity and add the new sub-activity
-        const updatedData = currentData.data.map(activity => {
+        console.log('Updating cache optimistically for sub-activity creation');
+        
+        // Find the parent main activity and add the new sub-activity
+        const updatedActivities = currentData.data.map(activity => {
           if (activity.id === selectedActivity?.id) {
-            return {
-              ...activity,
-              sub_activities: [...(activity.sub_activities || []), result.data || result]
-            };
+            const newSubActivity = result.data || result;
+            const existingSubActivities = activity.sub_activities || [];
+            
+            // Ensure we don't duplicate
+            const subExists = existingSubActivities.some(sub => sub.id === newSubActivity.id);
+            if (!subExists) {
+              return {
+                ...activity,
+                sub_activities: [...existingSubActivities, newSubActivity]
+              };
+            }
           }
           return activity;
         });
         
-        // Update the cache with new data
+        // Update cache with optimistic data
         queryClient.setQueryData(queryKey, {
           ...currentData,
-          data: updatedData
+          data: updatedActivities
         });
+        
+        console.log('Cache updated optimistically with new sub-activity');
       }
       
-      // Gentle background refetch to sync with server (no UI impact)
-      setTimeout(() => {
-        queryClient.invalidateQueries({ queryKey: ['main-activities', initiativeId] });
-      }, 2000);
-      
       closeAllModals();
+      
+      // PRODUCTION FIX: Gentle background sync after 3 seconds (no UI impact)
+      setTimeout(() => {
+        console.log('Background sync: Refreshing main activities data');
+        queryClient.invalidateQueries({ 
+          queryKey: ['main-activities', initiativeId],
+          exact: false
+        });
+      }, 3000);
     },
     onError: (error) => {
       console.error('Failed to create sub-activity:', error);
+      closeAllModals();
     }
   });
 
   // Update sub-activity mutation with immediate cache update
   const updateSubActivityMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: any }) => subActivities.update(id, data),
-    onSuccess: (result) => {
+    onSuccess: (result, variables) => {
       console.log('Sub-activity updated successfully:', result);
       
-      // PRODUCTION FIX: Optimistic update for edit operations
+      // PRODUCTION FIX: Optimistic cache update for updates
       const queryKey = ['main-activities', initiativeId, userOrgId, refreshKey];
       const currentData = queryClient.getQueryData(queryKey);
       
       if (currentData?.data && Array.isArray(currentData.data)) {
-        const updatedData = currentData.data.map(activity => {
+        console.log('Updating cache optimistically for sub-activity update');
+        
+        const updatedActivities = currentData.data.map(activity => {
           if (activity.id === selectedActivity?.id && activity.sub_activities) {
             return {
               ...activity,
               sub_activities: activity.sub_activities.map(sub => 
-                sub.id === selectedSubActivity?.id ? (result.data || result) : sub
+                sub.id === variables.id ? (result.data || result) : sub
               )
             };
           }
           return activity;
         });
         
-        // Update the cache with new data
+        // Update cache with optimistic data
         queryClient.setQueryData(queryKey, {
           ...currentData,
-          data: updatedData
+          data: updatedActivities
         });
       }
       
-      // Gentle background refetch to sync with server
-      setTimeout(() => {
-        queryClient.invalidateQueries({ queryKey: ['main-activities', initiativeId] });
-      }, 2000);
-      
       closeAllModals();
+      
+      // Background sync after 3 seconds
+      setTimeout(() => {
+        queryClient.invalidateQueries({ 
+          queryKey: ['main-activities', initiativeId],
+          exact: false
+        });
+      }, 3000);
     },
     onError: (error) => {
       console.error('Failed to update sub-activity:', error);
+      closeAllModals();
     }
   });
 
   // Delete activity mutation with immediate cache update
   const deleteActivityMutation = useMutation({
     mutationFn: (activityId: string) => mainActivities.delete(activityId),
-    onSuccess: (result) => {
-      console.log('Main activity deleted successfully');
+    onSuccess: (result, activityId) => {
+      console.log('Main activity deleted successfully:', activityId);
       
       // PRODUCTION FIX: Optimistic removal from cache
       const queryKey = ['main-activities', initiativeId, userOrgId, refreshKey];
@@ -226,11 +260,15 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
           ...currentData,
           data: updatedData
         });
+        console.log('Optimistically removed deleted activity from cache');
       }
       
-      // Background sync
+      // Background sync after 1 second
       setTimeout(() => {
-        queryClient.invalidateQueries({ queryKey: ['main-activities', initiativeId] });
+        queryClient.invalidateQueries({ 
+          queryKey: ['main-activities', initiativeId],
+          exact: false
+        });
       }, 1000);
     },
     onError: (error) => {
@@ -258,46 +296,48 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
 
   // CRITICAL: Ensure we always have valid array data
   const safeActivitiesData = Array.isArray(activitiesData) ? activitiesData : [];
-  console.log('MainActivityList: Safe data length:', safeActivitiesData.length);
-  console.log('MainActivityList: Safe activities data length:', safeActivitiesData.length);
+  console.log('MainActivityList: Processing', safeActivitiesData.length, 'total activities');
 
   // PRODUCTION-OPTIMIZED: Very permissive filtering for maximum compatibility
   const displayActivities = safeActivitiesData.filter(activity => {
     if (!activity) {
-      console.log('MainActivityList: Skipping null activity');
+      console.log('MainActivityList: Skipping null/undefined activity');
       return false;
     }
     
-    // PRODUCTION FIX: Ultra-permissive filtering
+    // PRODUCTION FIX: Ultra-permissive filtering to prevent disappearing activities
     const hasNoOrganization = !activity.organization || 
                              activity.organization === null || 
                              activity.organization === '' ||
-                             activity.organization === 'null';
+                             activity.organization === 'null' ||
+                             activity.organization === undefined;
     
     const belongsToUserOrg = userOrgId && activity.organization && 
                             (String(activity.organization) === String(userOrgId) ||
                              Number(activity.organization) === Number(userOrgId));
     
-    const isDefaultActivity = activity.is_default === true;
     const isDefault = activity.is_default === true;
     
-    // Show if: no org, belongs to user, or is default
-    const shouldInclude = hasNoOrganization || belongsToUserOrg || isDefaultActivity;
+    // CRITICAL FIX: Very permissive inclusion rules
+    const shouldInclude = hasNoOrganization || belongsToUserOrg || isDefault;
     
-    // Show activity if: no org specified, belongs to user org, or is default
-    const shouldInclude2 = hasNoOrganization || belongsToUserOrg || isDefault;
+    // Enhanced logging for debugging disappearing activities
+    if (!shouldInclude) {
+      console.log(`MainActivityList: FILTERED OUT "${activity.name}" - org:${activity.organization}, userOrg:${userOrgId}, hasNoOrg:${hasNoOrganization}, belongsToUser:${belongsToUserOrg}, isDefault:${isDefault}`);
+    }
     
-    console.log(`MainActivityList: "${activity.name}" - org:${activity.organization}, userOrg:${userOrgId}, noOrg:${hasNoOrganization}, belongsToUser:${belongsToUserOrg}, isDefault:${isDefaultActivity}, include:${shouldInclude}`);
+    console.log(`MainActivityList: "${activity.name}" - org:${activity.organization}, userOrg:${userOrgId}, noOrg:${hasNoOrganization}, belongsToUser:${belongsToUserOrg}, isDefault:${isDefault}, include:${shouldInclude}`);
     
     return shouldInclude;
   });
 
-  console.log(`MainActivityList: FINAL RESULT - displaying ${displayActivities.length} of ${safeActivitiesData.length} activities`, {
+  console.log(`MainActivityList: FINAL DISPLAY RESULT - showing ${displayActivities.length} of ${safeActivitiesData.length} total activities`, {
     initiativeId,
     userOrgId,
     totalFromAPI: safeActivitiesData.length,
     afterFiltering: displayActivities.length,
-    isLoading
+    isLoading,
+    cacheKey: `main-activities-${initiativeId}-${userOrgId}-${refreshKey}`
   });
 
   // Close all modals
