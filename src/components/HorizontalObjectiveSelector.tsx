@@ -356,26 +356,29 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
         setSaveProgress(null);
         return;
       }
-            // For default objectives, save the new weight as planner_weight
       
       // Execute updates in batches
       const BATCH_SIZE = 3;
       let completedOperations = 0;
-                id: obj.id,
+      
       for (let i = 0; i < saveOperations.length; i += BATCH_SIZE) {
-                // Don't include other fields to avoid overwriting them
+        const batch = saveOperations.slice(i, i + BATCH_SIZE);
+        
+        setSaveProgress({
+          current: completedOperations,
           total: saveOperations.length,
           message: `Saving objectives ${completedOperations + 1}-${Math.min(completedOperations + BATCH_SIZE, saveOperations.length)} of ${saveOperations.length}...`
         });
         
-            // For custom objectives, save the new weight as weight
         const batchPromises = batch.map(async (operation) => {
           try {
             console.log('Saving objective:', operation.id, operation.name, operation.data);
             
-                id: obj.id,
             if (!operation.id || !operation.data) {
-                // Don't include other fields to avoid overwriting them
+              throw new Error('Invalid operation data');
+            }
+            
+            return await updateObjectiveMutation.mutateAsync(operation.data);
           } catch (error) {
             console.error(`Failed to save objective ${operation.name} (ID: ${operation.id}):`, error);
             throw new Error(`Failed to save "${operation.name}": ${error.message}`);
@@ -560,14 +563,14 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
             {selectedObjectives.map(obj => {
               if (!obj || !obj.id) return null;
               
-                      if (!obj || (!obj.id && obj.id !== 0)) {
-                        console.warn('Rendering objective without valid ID:', obj);
-                        return null;
-                      }
-                      
-                      const id = obj.id.toString();
-                      const effectiveWeight = objectiveWeights[id] !== undefined ? 
-                                             objectiveWeights[id] : 
+              if (!obj || (!obj.id && obj.id !== 0)) {
+                console.warn('Rendering objective without valid ID:', obj);
+                return null;
+              }
+              
+              const id = obj.id.toString();
+              const effectiveWeight = objectiveWeights[id] !== undefined ? 
+                                     objectiveWeights[id] : 
                                      getEffectiveWeight(obj);
               
               return (
