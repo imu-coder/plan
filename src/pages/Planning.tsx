@@ -1539,5 +1539,4 @@ const Planning: React.FC = () => {
     </div>
   );
 };
-
 export default Planning;
