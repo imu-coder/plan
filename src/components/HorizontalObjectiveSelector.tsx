@@ -5,7 +5,7 @@ import { useLanguage } from '../lib/i18n/LanguageContext';
 import { AlertCircle, CheckCircle, Target, Plus, Minus, RefreshCw, Info, ArrowRight } from 'lucide-react';
 import type { StrategicObjective } from '../types/organization';
 
-// Function to get effective weight for an objective
+// Helper function to safely get effective weight
 const getEffectiveWeight = (objective: StrategicObjective): number => {
   if (objective.effective_weight !== undefined) {
     return objective.effective_weight;
@@ -30,7 +30,7 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
   const { t } = useLanguage();
   const queryClient = useQueryClient();
   
-  // Core state
+  // All state hooks at top level
   const [selectedObjectives, setSelectedObjectives] = useState<StrategicObjective[]>(initialObjectives);
   const [objectiveWeights, setObjectiveWeights] = useState<Record<string, number>>({});
   const [validationError, setValidationError] = useState<string | null>(null);
@@ -41,12 +41,13 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveProgress, setSaveProgress] = useState<{ current: number; total: number; message: string } | null>(null);
 
-  // Fetch all objectives with error handling
-  const { data: objectivesData, isLoading, error, refetch } = useQuery({
+  // Fetch all objectives with proper error handling
+  const { data: objectivesResponse, isLoading, error, refetch } = useQuery({
     queryKey: ['objectives', 'selector'],
     queryFn: async () => {
       try {
         const response = await objectives.getAll();
+        console.log('HorizontalObjectiveSelector: API response:', response);
         return response;
       } catch (error) {
         console.error('Error fetching objectives:', error);
@@ -55,18 +56,55 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
     },
     retry: 2,
     retryDelay: 1000,
-    staleTime: 30000, // 30 seconds cache
+    staleTime: 30000,
     refetchOnWindowFocus: false,
   });
 
-  // Mutation for updating objective weights with optimistic updates
+  // Safely extract objectives data from API response
+  const objectivesData = useMemo(() => {
+    if (!objectivesResponse) return [];
+    
+    // Handle different API response formats
+    if (Array.isArray(objectivesResponse)) {
+      return objectivesResponse;
+    }
+    
+    if (objectivesResponse.data && Array.isArray(objectivesResponse.data)) {
+      return objectivesResponse.data;
+    }
+    
+    if (objectivesResponse.results && Array.isArray(objectivesResponse.results)) {
+      return objectivesResponse.results;
+    }
+    
+    console.warn('HorizontalObjectiveSelector: Unexpected API response format:', objectivesResponse);
+    return [];
+  }, [objectivesResponse]);
+
+  // Memoized unselected objectives calculation
+  const unselectedObjectives = useMemo(() => {
+    if (!Array.isArray(objectivesData)) {
+      console.warn('HorizontalObjectiveSelector: objectivesData is not an array:', objectivesData);
+      return [];
+    }
+    
+    return objectivesData.filter(obj => 
+      obj && obj.id && !selectedObjectives.some(selected => selected && selected.id === obj.id)
+    );
+  }, [objectivesData, selectedObjectives]);
+
+  // Memoized form validation
+  const isFormValid = useMemo(() => {
+    return selectedObjectives.length > 0 && Math.abs(totalWeight - 100) < 0.01;
+  }, [selectedObjectives.length, totalWeight]);
+
+  // Mutation for updating objectives
   const updateObjectiveMutation = useMutation({
     mutationFn: async (objective: Partial<StrategicObjective>) => {
       if (!objective.id) throw new Error("Missing objective ID");
       return objectives.update(objective.id.toString(), objective);
     },
     onSuccess: () => {
-      // Only invalidate when all operations complete
       queryClient.invalidateQueries({ queryKey: ['objectives'] });
     },
     onError: (error, variables, context) => {
@@ -75,14 +113,14 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
     }
   });
 
-  // Initialize objective weights from initial objectives
+  // Initialize weights from initial objectives
   useEffect(() => {
     if (initialObjectives.length > 0 && !hasInitialized) {
       const initialWeights: Record<string, number> = {};
       
       initialObjectives.forEach(obj => {
         if (obj && obj.id) {
-          const effectiveWeight = obj.effective_weight || getEffectiveWeight(obj);
+          const effectiveWeight = getEffectiveWeight(obj);
           initialWeights[obj.id] = effectiveWeight;
         }
       });
@@ -93,21 +131,23 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
     }
   }, [initialObjectives, hasInitialized]);
 
-  // Calculate total weight whenever objectiveWeights changes
+  // Calculate total weight
   useEffect(() => {
     let total = 0;
     
     selectedObjectives.forEach(obj => {
-      const weight = objectiveWeights[obj.id] !== undefined ? 
-                    objectiveWeights[obj.id] : 
-                    obj.effective_weight || getEffectiveWeight(obj);
-      total += Number(weight) || 0;
+      if (obj && obj.id) {
+        const weight = objectiveWeights[obj.id] !== undefined ? 
+                      objectiveWeights[obj.id] : 
+                      getEffectiveWeight(obj);
+        total += Number(weight) || 0;
+      }
     });
     
     setTotalWeight(total);
   }, [objectiveWeights, selectedObjectives]);
   
-  // Validation and parent callback effect
+  // Validation and parent callback
   useEffect(() => {
     if (!hasInitialized) return;
 
@@ -123,21 +163,19 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
     if (Math.abs(totalWeight - 100) < 0.01) {
       setValidationError(null);
       
-      // Create objectives with updated weights
       const objectivesWithWeights = selectedObjectives.map(obj => {
         const userSetWeight = objectiveWeights[obj.id];
-        const originalEffectiveWeight = obj.effective_weight || getEffectiveWeight(obj);
+        const originalEffectiveWeight = getEffectiveWeight(obj);
         const effectiveWeight = userSetWeight !== undefined ? userSetWeight : originalEffectiveWeight;
         
         return {
           ...obj,
-          weight: obj.weight, // Keep original weight for default objectives
-          planner_weight: effectiveWeight, // Use the newly set weight as planner_weight
-          effective_weight: effectiveWeight // Set effective_weight for downstream components
+          weight: obj.weight,
+          planner_weight: effectiveWeight,
+          effective_weight: effectiveWeight
         };
       });
       
-      // Only call parent callback if data has actually changed
       const currentDataString = JSON.stringify(objectivesWithWeights.map(obj => ({
         id: obj.id,
         effective_weight: obj.effective_weight
@@ -152,18 +190,17 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
     }
   }, [totalWeight, selectedObjectives, objectiveWeights, hasInitialized, lastSentData, onObjectivesSelected]);
 
-  // Memoized handlers to prevent unnecessary re-renders
+  // Memoized handlers
   const handleSelectObjective = useCallback((objective: StrategicObjective) => {
-    const isSelected = selectedObjectives.some(obj => obj.id === objective.id);
+    if (!objective || !objective.id) return;
     
-    if (isSelected) {
-      return; // Objective already selected
-    }
+    const isSelected = selectedObjectives.some(obj => obj && obj.id === objective.id);
+    if (isSelected) return;
     
     const updatedObjectives = [...selectedObjectives, objective];
     setSelectedObjectives(updatedObjectives);
 
-    const effectiveWeight = objective.effective_weight || getEffectiveWeight(objective);
+    const effectiveWeight = getEffectiveWeight(objective);
     setObjectiveWeights(prev => ({
       ...prev,
       [objective.id]: effectiveWeight
@@ -171,7 +208,7 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
   }, [selectedObjectives]);
 
   const handleRemoveObjective = useCallback((objectiveId: number | string) => {
-    const updatedObjectives = selectedObjectives.filter(obj => obj.id !== objectiveId);
+    const updatedObjectives = selectedObjectives.filter(obj => obj && obj.id !== objectiveId);
     setSelectedObjectives(updatedObjectives);
     
     setObjectiveWeights(prev => {
@@ -188,7 +225,6 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
     }));
   }, []);
 
-  // Auto-distribute weights to reach 100%
   const handleAutoDistribute = useCallback(() => {
     if (selectedObjectives.length === 0) return;
     
@@ -196,7 +232,9 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
     const updatedWeights: Record<string, number> = {};
     
     selectedObjectives.forEach(obj => {
-      updatedWeights[obj.id] = equalWeight;
+      if (obj && obj.id) {
+        updatedWeights[obj.id] = equalWeight;
+      }
     });
     
     setObjectiveWeights(updatedWeights);
@@ -219,30 +257,30 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
     setSaveProgress({ current: 0, total: selectedObjectives.length, message: 'Preparing to save...' });
     
     try {
-      console.log('HorizontalObjectiveSelector: Starting optimized save process');
+      console.log('HorizontalObjectiveSelector: Starting save process');
       
-      // Prepare all save operations
       const saveOperations = [];
-      let operationCount = 0;
       
       selectedObjectives.forEach(obj => {
+        if (!obj || !obj.id) return;
+        
         const newWeight = objectiveWeights[obj.id];
+        if (newWeight === undefined) return;
         
         if (obj.is_default) {
-          const objectiveData = {
-            planner_weight: newWeight,
-            title: obj.title,
-            description: obj.description,
-            weight: obj.weight,
-            is_default: obj.is_default,
-          };
           saveOperations.push({
             type: 'update',
             id: obj.id,
-            data: objectiveData,
+            data: {
+              planner_weight: newWeight,
+              title: obj.title,
+              description: obj.description,
+              weight: obj.weight,
+              is_default: obj.is_default,
+            },
             name: obj.title
           });
-        } else if (!obj.is_default) {
+        } else {
           saveOperations.push({
             type: 'update',
             id: obj.id,
@@ -258,8 +296,8 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
         }
       });
       
-      // Execute all updates with progress tracking
-      const BATCH_SIZE = 3; // Process 3 at a time for better performance
+      // Execute updates in batches
+      const BATCH_SIZE = 3;
       let completedOperations = 0;
       
       for (let i = 0; i < saveOperations.length; i += BATCH_SIZE) {
@@ -280,11 +318,8 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
           }
         });
         
-        // Wait for this batch to complete before starting the next
         await Promise.all(batchPromises);
         completedOperations += batch.length;
-        
-        console.log(`HorizontalObjectiveSelector: Completed batch ${Math.floor(i/BATCH_SIZE) + 1}/${Math.ceil(saveOperations.length/BATCH_SIZE)}`);
       }
       
       setSaveProgress({
@@ -293,47 +328,22 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
         message: 'Finalizing changes...'
       });
       
-      // Single cache refresh at the end
       await queryClient.invalidateQueries({ queryKey: ['objectives'] });
       
-      console.log('HorizontalObjectiveSelector: All objectives saved successfully, proceeding to planning');
-      
-      // Clear progress and proceed
+      console.log('HorizontalObjectiveSelector: All objectives saved, proceeding');
       setSaveProgress(null);
       onProceed();
       
     } catch (error: any) {
       console.error('Failed to save objective weights:', error);
-      
-      let errorMessage = 'Failed to save objective weights. Please try again.';
-      if (error.message) {
-        errorMessage = error.message;
-      } else if (error.response?.data) {
-        if (typeof error.response.data === 'string') {
-          errorMessage = error.response.data;
-        } else if (error.response.data.detail) {
-          errorMessage = error.response.data.detail;
-        }
-      }
-      
-      setSaveError(errorMessage);
+      setSaveError(error.message || 'Failed to save objective weights. Please try again.');
     } finally {
       setIsSavingWeights(false);
       setSaveProgress(null);
     }
   }, [selectedObjectives, totalWeight, objectiveWeights, onProceed, updateObjectiveMutation, queryClient]);
 
-  // Memoized computed values for performance
-  const unselectedObjectives = useMemo(() => {
-    return objectivesData?.filter(obj => 
-      !selectedObjectives.some(selected => selected.id === obj.id)
-    ) || [];
-  }, [objectivesData, selectedObjectives]);
-
-  const isFormValid = useMemo(() => {
-    return selectedObjectives.length > 0 && Math.abs(totalWeight - 100) < 0.01;
-  }, [selectedObjectives.length, totalWeight]);
-
+  // Loading state
   if (isLoading) {
     return (
       <div className="flex items-center justify-center p-8">
@@ -343,6 +353,7 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
     );
   }
 
+  // Error state
   if (error) {
     return (
       <div className="bg-red-50 border border-red-200 rounded-lg p-4">
@@ -355,6 +366,24 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
           className="mt-2 px-3 py-1 text-sm bg-red-100 text-red-700 rounded hover:bg-red-200"
         >
           Retry
+        </button>
+      </div>
+    );
+  }
+
+  // No data state
+  if (!Array.isArray(objectivesData) || objectivesData.length === 0) {
+    return (
+      <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+        <div className="flex items-center">
+          <AlertCircle className="h-5 w-5 text-yellow-600 mr-2" />
+          <span className="text-yellow-800">No objectives available</span>
+        </div>
+        <button
+          onClick={handleRetryLoading}
+          className="mt-2 px-3 py-1 text-sm bg-yellow-100 text-yellow-700 rounded hover:bg-yellow-200"
+        >
+          Refresh
         </button>
       </div>
     );
@@ -442,7 +471,7 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
             >
               {isSavingWeights ? (
                 <>
-                  <div className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-solid border-current border-r-transparent align-[-0.125em] motion-reduce:animate-[spin_1.5s_linear_infinite] mr-2"></div>
+                  <div className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-solid border-current border-r-transparent mr-2"></div>
                   Saving Weights...
                 </>
               ) : (
@@ -465,9 +494,11 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
           
           <div className="space-y-3">
             {selectedObjectives.map(obj => {
+              if (!obj || !obj.id) return null;
+              
               const effectiveWeight = objectiveWeights[obj.id] !== undefined ? 
                                      objectiveWeights[obj.id] : 
-                                     obj.effective_weight || getEffectiveWeight(obj);
+                                     getEffectiveWeight(obj);
               
               return (
                 <div key={obj.id} className="bg-gray-50 p-4 rounded-lg border border-gray-200">
@@ -559,6 +590,8 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {unselectedObjectives.map((objective: StrategicObjective) => {
+              if (!objective || !objective.id) return null;
+              
               const effectiveWeight = objective.planner_weight !== undefined && objective.planner_weight !== null
                 ? objective.planner_weight
                 : objective.weight;
@@ -594,6 +627,7 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
         )}
       </div>
       
+      {/* Empty state */}
       {selectedObjectives.length === 0 && (
         <div className="text-center p-6 bg-gray-50 border-2 border-dashed border-gray-200 rounded-lg">
           <Target className="h-8 w-8 text-gray-400 mx-auto mb-2" />
