@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from django.contrib.auth.models import User
 from django.contrib.auth import authenticate
+from django.db import models
 from django.core.exceptions import ValidationError as DjangoValidationError
 from .models import (
     Organization, OrganizationUser, StrategicObjective, 
