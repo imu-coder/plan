@@ -1,14 +1,15 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Download, FileSpreadsheet, File as FilePdf, Send, AlertCircle, CheckCircle, DollarSign, Building2, Target, Activity, BarChart3, Info, Loader, RefreshCw } from 'lucide-react';
-import { useLanguage } from '../lib/i18n/LanguageContext';
 import { organizations, auth, objectives, initiatives, performanceMeasures, mainActivities } from '../lib/api';
-import type { StrategicObjective } from '../types/organization';
+import { auth, objectives, initiatives, performanceMeasures, mainActivities, subActivities } from '../lib/api';
 import type { PlanType } from '../types/plan';
 import { MONTHS } from '../types/plan';
-import { exportToExcel, exportToPDF, processDataForExport } from '../lib/utils/export';
-
+import { format } from 'date-fns';
+import { MONTHS } from '../types/plan';
 interface PlanReviewTableProps {
   objectives: StrategicObjective[];
+  onSubmit: (data: any) => Promise<void>;
+  isSubmitting: boolean;
   onSubmit: () => Promise<void>;
   isSubmitting: boolean;
   organizationName: string;
@@ -20,12 +21,16 @@ interface PlanReviewTableProps {
   userOrgId?: number | null;
   isViewOnly?: boolean;
   planData?: any;
-  refreshKey?: number;
+  isPreviewMode?: boolean;
+  userOrgId: number | null;
+  isViewOnly?: boolean;
+  refreshKey?: number; // Add refresh trigger
+  onDataRefresh?: (refreshedData: StrategicObjective[]) => void; // Callback for fresh data
   onDataRefresh?: (refreshedObjectives: any[]) => void;
 }
 
 const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
-  objectives,
+  isSubmitting,
   onSubmit,
   isSubmitting,
   organizationName,
@@ -37,15 +42,19 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
   userOrgId = null,
   isViewOnly = false,
   planData = null,
+  isPreviewMode = false,
+  userOrgId,
+  isViewOnly = false,
   refreshKey = 0,
   onDataRefresh
+  onDataRefresh
 }) => {
-  const { t } = useLanguage();
   const [isSubmittingPlan, setIsSubmittingPlan] = useState(false);
-  const [submitError, setSubmitError] = useState<string | null>(null);
-  const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
-  const [organizationsMap, setOrganizationsMap] = useState<Record<string, string>>({});
-  const [processedObjectives, setProcessedObjectives] = useState<StrategicObjective[]>(objectives || []);
+  const [isLoadingFreshData, setIsLoadingFreshData] = useState(false);
+  const [dataProcessingError, setDataProcessingError] = useState<string | null>(null);
+  const [lastRefreshKey, setLastRefreshKey] = useState(refreshKey);
+  const [expandedObjectives, setExpandedObjectives] = useState<Record<string, boolean>>({});
+  const [expandedInitiatives, setExpandedInitiatives] = useState<Record<string, boolean>>({});
   const [isLoading, setIsLoading] = useState(false);
   const [processingError, setProcessingError] = useState<string | null>(null);
   const [effectiveUserOrgId, setEffectiveUserOrgId] = useState<number | null>(userOrgId);
@@ -73,32 +82,56 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
         }
         
         // If still no orgId, try from objectives data
-        if (!orgId && objectives && objectives.length > 0) {
+  // PRODUCTION-SAFE: Fetch fresh data when refreshKey changes (when review modal opens)
           const firstObjective = objectives[0];
-          if (firstObjective?.initiatives && firstObjective.initiatives.length > 0) {
+    const fetchFreshDataForReview = async () => {
+      if (refreshKey === lastRefreshKey || refreshKey === 0) {
+        return; // No refresh needed
+      }
+      
             const firstInitiative = firstObjective.initiatives[0];
-            if (firstInitiative?.organization) {
-              orgId = Number(firstInitiative.organization);
-              console.log('PlanReviewTable: Got user org from objectives data:', orgId);
-            }
-          }
+        setIsLoadingFreshData(true);
+        setDataProcessingError(null);
+        setLastRefreshKey(refreshKey);
+        
+        console.log('PlanReviewTable: Fetching fresh data for review, refreshKey:', refreshKey);
+        console.log('PlanReviewTable: User organization ID:', userOrgId);
+        
+        if (!userOrgId) {
+          console.warn('PlanReviewTable: No user organization ID available');
+          setProcessedObjectives(objectives);
+          return;
         }
         
-        setEffectiveUserOrgId(orgId);
-        console.log('PlanReviewTable: Effective user org ID set to:', orgId);
+        // Fetch fresh complete data for all objectives
+        const enrichedObjectives = await fetchCompleteObjectiveData(objectives, userOrgId);
+        
+        console.log('PlanReviewTable: Successfully fetched fresh data:', enrichedObjectives.length);
+        setProcessedObjectives(enrichedObjectives);
+        
+        // Notify parent component of fresh data
+        if (onDataRefresh) {
+          onDataRefresh(enrichedObjectives);
+        }
+        
+        
+        console.error('PlanReviewTable: Error fetching fresh data:', error);
+        setDataProcessingError('Failed to fetch latest data. Using available data.');
+        // Fallback to provided objectives
+        setProcessedObjectives(objectives);
       } catch (error) {
-        console.error('PlanReviewTable: Failed to determine user org ID:', error);
+        setIsLoadingFreshData(false);
         setProcessingError('Failed to determine user organization');
       }
     };
-    
-    determineUserOrgId();
+    if (userOrgId) {
+      fetchFreshDataForReview();
   }, [userOrgId, planData, objectives]);
-
+  }, [refreshKey, userOrgId, lastRefreshKey, objectives, onDataRefresh]);
   // PERFORMANCE OPTIMIZED: Enhanced data processing with caching
-  const processObjectiveData = async (objectivesList: StrategicObjective[], useCache = false) => {
-    if (!effectiveUserOrgId || !objectivesList || objectivesList.length === 0) {
-      console.log('PlanReviewTable: Missing required data for processing');
+  // PRODUCTION-SAFE: Comprehensive data fetching with organization filtering
+  const fetchCompleteObjectiveData = async (objectivesList: StrategicObjective[], orgId: number) => {
+    if (!orgId || !objectivesList.length) {
       return objectivesList || [];
     }
 
@@ -115,7 +148,7 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
       setProcessingError(null);
       setIsLoading(true);
 
-      // PERFORMANCE: Batch API calls for better performance
+      console.log('PlanReviewTable: Fetching complete data for', objectivesList.length, 'objectives, orgId:', orgId);
       const batchSize = 3;
       const enrichedObjectives = await Promise.all(
         objectivesList.map(async (objective, index) => {
@@ -141,11 +174,25 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
                                       (Number(initiative.organization) === Number(effectiveUserOrgId) ||
                                        String(initiative.organization) === String(effectiveUserOrgId));
               
+            
+            console.log(`PlanReviewTable: Objective "${objective.title}" - ${objectiveInitiatives.length} total initiatives`);
+
+            // PRODUCTION-SAFE: Filter initiatives for user's organization only
+            const filteredInitiatives = objectiveInitiatives.filter(initiative => {
+              if (!initiative) return false;
+              
+              const isDefault = initiative.is_default === true;
+              const hasNoOrg = !initiative.organization || initiative.organization === null || initiative.organization === '';
+              const belongsToUserOrg = initiative.organization && 
+                                      (Number(initiative.organization) === Number(orgId) ||
+                                       String(initiative.organization) === String(orgId));
+              
               const shouldInclude = isDefault || hasNoOrg || belongsToUserOrg;
-              console.log(`PlanReviewTable: Initiative "${initiative.name}" - include: ${shouldInclude}`);
+              
+              console.log(`PlanReviewTable: Initiative "${initiative.name}" - org:${initiative.organization}, userOrg:${orgId}, include:${shouldInclude}`);
               return shouldInclude;
             });
-
+            
             console.log(`PlanReviewTable: Filtered to ${filteredInitiatives.length} initiatives for user org`);
 
             // PRODUCTION-SAFE: For each initiative, get fresh performance measures and main activities
@@ -184,23 +231,67 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
                                              String(measure.organization) === String(effectiveUserOrgId));
                     
                     const shouldInclude = hasNoOrg || belongsToUserOrg;
+                  console.log(`PlanReviewTable: Fetching data for initiative "${initiative.name}"`);
+                  
                     console.log(`PlanReviewTable: Measure "${measure.name}" - include: ${shouldInclude}`);
                     return shouldInclude;
                   });
 
-                  // PRODUCTION-SAFE: Filter activities by organization
-                  const filteredActivities = allActivities.filter(activity => {
-                    const hasNoOrg = !activity.organization || activity.organization === null;
-                    const belongsToUserOrg = activity.organization && 
-                                            (Number(activity.organization) === Number(effectiveUserOrgId) ||
-                                             String(activity.organization) === String(effectiveUserOrgId));
-                    
-                    const shouldInclude = hasNoOrg || belongsToUserOrg;
-                    console.log(`PlanReviewTable: Activity "${activity.name}" - include: ${shouldInclude}`);
-                    return shouldInclude;
+                  // PRODUCTION-SAFE: Filter measures by organization
+                  const filteredMeasures = allMeasures.filter(measure => {
+                    if (!measure) return false;
+                    const hasNoOrg = !measure.organization || measure.organization === null;
+                    const belongsToUserOrg = measure.organization && 
+                                            (Number(measure.organization) === Number(orgId) ||
+                                             String(measure.organization) === String(orgId));
+                    return hasNoOrg || belongsToUserOrg;
                   });
+                  
+                  console.log(`PlanReviewTable: Initiative "${initiative.name}" - ${allMeasures.length} total measures, ${filteredMeasures.length} filtered`);
 
-                  console.log(`PlanReviewTable: Initiative "${initiative.name}" - measures: ${allMeasures.length} → ${filteredMeasures.length}, activities: ${allActivities.length} → ${filteredActivities.length}`);
+                  // Fetch main activities with sub-activities
+                  const activitiesResponse = await mainActivities.getByInitiative(initiative.id);
+                  const allActivities = activitiesResponse?.data || [];
+                  
+                  console.log(`PlanReviewTable: Initiative "${initiative.name}" - ${allActivities.length} total activities`);
+                  
+                  // PRODUCTION-SAFE: Filter activities by organization and fetch sub-activities
+                  const filteredActivities = await Promise.all(
+                    allActivities
+                      .filter(activity => {
+                        if (!activity) return false;
+                        const hasNoOrg = !activity.organization || activity.organization === null;
+                        const belongsToUserOrg = activity.organization && 
+                                                (Number(activity.organization) === Number(orgId) ||
+                                                 String(activity.organization) === String(orgId));
+                        const shouldInclude = hasNoOrg || belongsToUserOrg;
+                        
+                        console.log(`PlanReviewTable: Activity "${activity.name}" - org:${activity.organization}, include:${shouldInclude}`);
+                        return shouldInclude;
+                      })
+                      .map(async (activity) => {
+                        try {
+                          // Fetch fresh sub-activities for budget calculation
+                          const subActivitiesResponse = await subActivities.getByMainActivity(activity.id);
+                          const activitySubActivities = subActivitiesResponse?.data || [];
+                          
+                          console.log(`PlanReviewTable: Activity "${activity.name}" - ${activitySubActivities.length} sub-activities`);
+                          
+                          return {
+                            ...activity,
+                            sub_activities: activitySubActivities
+                          };
+                        } catch (error) {
+                          console.error(`PlanReviewTable: Error fetching sub-activities for activity ${activity.id}:`, error);
+                          return {
+                            ...activity,
+                            sub_activities: []
+                          };
+                        }
+                      })
+                    const belongsToUserOrg = activity.organization && 
+                    console.log(`PlanReviewTable: Activity "${activity.name}" - include: ${shouldInclude}`);
+                  console.log(`PlanReviewTable: Initiative "${initiative.name}" - ${filteredActivities.length} filtered activities with sub-activities`);
 
                   return {
                     ...initiative,
@@ -208,7 +299,7 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
                     main_activities: filteredActivities
                   };
                 } catch (error) {
-                  console.error(`PlanReviewTable: Error processing initiative ${initiative.id}:`, error);
+                  console.error(`PlanReviewTable: Error fetching data for initiative ${initiative.id}:`, error);
                   return {
                     ...initiative,
                     performance_measures: initiative.performance_measures || [],
@@ -218,8 +309,11 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
               })
             );
 
-            return {
-              ...objective,
+            console.log(`PlanReviewTable: Objective "${objective.title}" - effective weight: ${effectiveWeight}, initiatives: ${enrichedInitiatives.length}`);
+
+            // PRODUCTION-SAFE: Set effective weight correctly
+            const effectiveWeight = objective.effective_weight !== undefined ? objective.effective_weight :
+              objective.planner_weight !== undefined && objective.planner_weight !== null
               initiatives: enrichedInitiatives
             };
           } catch (error) {
@@ -229,10 +323,10 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
         })
       );
       
-      console.log('PlanReviewTable: Successfully processed all objectives');
+      console.log('PlanReviewTable: Successfully enriched objectives with complete data:', enrichedObjectives.length);
       return enrichedObjectives;
       
-    } catch (error) {
+      console.error('PlanReviewTable: Error in fetchCompleteObjectiveData:', error);
       console.error('PlanReviewTable: Error in processObjectiveData:', error);
       setProcessingError(`Failed to process objectives data: ${error.message || 'Unknown error'}`);
       return objectivesList || []; // Return original data as fallback
@@ -338,34 +432,43 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
     }
     
     return '-';
-  };
+  // PRODUCTION-SAFE: Initialize with provided objectives if no refresh needed
 
-  // Fetch organizations on mount
-  useEffect(() => {
+    if (refreshKey === 0 || !userOrgId) {
+      // Use provided objectives if no refresh requested or no userOrgId
+      console.log('PlanReviewTable: Using provided objectives, no refresh needed');
+      setProcessedObjectives(objectives);
+      return;
+    }
+  }, [objectives, userOrgId, refreshKey]);
     const fetchOrganizations = async () => {
-      try {
         console.log('PlanReviewTable: Fetching organizations for name mapping...');
         const response = await organizations.getAll();
         const orgMap: Record<string, string> = {};
         
         if (response?.data && Array.isArray(response.data)) {
-          response.data.forEach((org: any) => {
-            if (org?.id && org?.name) {
-              orgMap[String(org.id)] = org.name;
-            }
-          });
-          console.log('PlanReviewTable: Created organizations map with', Object.keys(orgMap).length, 'entries');
-        } else {
-          console.warn('PlanReviewTable: Invalid organizations response:', response);
-        }
-        
-        setOrganizationsMap(orgMap);
-      } catch (error) {
-        console.error('PlanReviewTable: Failed to fetch organizations:', error);
-        // Continue with empty map - don't block the component
-        setOrganizationsMap({});
+  // PRODUCTION-SAFE: Manual refresh function
+  const handleManualRefresh = async () => {
+    if (!userOrgId) return;
+    
+    try {
+      setIsLoadingFreshData(true);
+      setDataProcessingError(null);
+      
+      console.log('PlanReviewTable: Manual refresh triggered');
+      const enrichedObjectives = await fetchCompleteObjectiveData(objectives, userOrgId);
+      setProcessedObjectives(enrichedObjectives);
+      
+      if (onDataRefresh) {
+        onDataRefresh(enrichedObjectives);
       }
-    };
+    } catch (error) {
+      console.error('PlanReviewTable: Manual refresh error:', error);
+      setDataProcessingError('Failed to refresh data');
+    } finally {
+      setIsLoadingFreshData(false);
+    }
+  };
     
     fetchOrganizations();
   }, []);
@@ -460,26 +563,48 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
               sdgTotal += activitySdg;
               otherTotal += activityOther;
               
-              console.log(`PlanReviewTable: Activity "${activity.name}" total budget: $${activityBudgetRequired.toLocaleString()}`);
-              
-            } catch (activityError) {
-              console.error(`PlanReviewTable: Error processing activity ${actIndex}:`, activityError);
-              // Continue with other activities
-            }
-          });
+  // PRODUCTION-SAFE: Calculate budget from sub-activities
+  const calculateActivityBudget = (activity: any) => {
+    let budgetRequired = 0;
+    let government = 0;
+    let partners = 0;
+    let sdg = 0;
+    let other = 0;
         });
       });
-      
-      console.log('PlanReviewTable: Final budget totals:', {
-        total: total.toLocaleString(),
-        government: governmentTotal.toLocaleString(),
-        partners: partnersTotal.toLocaleString(),
-        sdg: sdgTotal.toLocaleString(),
-        other: otherTotal.toLocaleString()
-      });
-      
+      // Calculate from sub-activities (new structure)
+      if (activity.sub_activities && Array.isArray(activity.sub_activities) && activity.sub_activities.length > 0) {
+        activity.sub_activities.forEach(subActivity => {
+          try {
+            const cost = subActivity.budget_calculation_type === 'WITH_TOOL'
+              ? Number(subActivity.estimated_cost_with_tool || 0)
+              : Number(subActivity.estimated_cost_without_tool || 0);
+
+            budgetRequired += cost;
+            government += Number(subActivity.government_treasury || 0);
+            partners += Number(subActivity.partners_funding || 0);
+            sdg += Number(subActivity.sdg_funding || 0);
+            other += Number(subActivity.other_funding || 0);
+          } catch (subError) {
+            console.error('PlanReviewTable: Error processing sub-activity budget:', subError);
+          }
+        });
+      } 
+      // Fallback to legacy budget structure
+      else if (activity.budget) {
+        try {
+          budgetRequired = activity.budget.budget_calculation_type === 'WITH_TOOL' 
+            ? Number(activity.budget.estimated_cost_with_tool || 0)
+            : Number(activity.budget.estimated_cost_without_tool || 0);
+          
+          government = Number(activity.budget.government_treasury || 0);
+          partners = Number(activity.budget.partners_funding || 0);
+          sdg = Number(activity.budget.sdg_funding || 0);
+          other = Number(activity.budget.other_funding || 0);
+        } catch (budgetError) {
+          console.error('PlanReviewTable: Error processing legacy budget:', budgetError);
+        }
       return { total, governmentTotal, partnersTotal, sdgTotal, otherTotal };
-      
     } catch (error) {
       console.error('PlanReviewTable: Error calculating budget totals:', error);
       return { total: 0, governmentTotal: 0, partnersTotal: 0, sdgTotal: 0, otherTotal: 0 };
@@ -895,17 +1020,14 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
             'Gap': gap
           });
           
-          objectiveAdded = true;
-          initiativeAdded = true;
-        });
-      });
+      console.error('PlanReviewTable: Error in calculateActivityBudget:', error);
     });
+    
+    const totalAvailable = government + partners + sdg + other;
+    const gap = Math.max(0, budgetRequired - totalAvailable);
+    
+    return { budgetRequired, government, partners, sdg, other, totalAvailable, gap };
 
-    console.log(`PlanReviewTable: Converted to ${tableRows.length} table rows`);
-    return tableRows;
-  };
-
-  const handleExportExcel = () => {
     if (!processedObjectives || processedObjectives.length === 0) {
       console.error('PlanReviewTable: No objectives data available for export');
       return;
@@ -913,23 +1035,34 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
     
     console.log('PlanReviewTable: Exporting to Excel...');
     // Convert processed objectives to table rows format first
-    const tableRowsData = convertObjectivesToTableRows(processedObjectives);
+
+  // PRODUCTION-SAFE: Get months for quarter display
+  const getMonthsForQuarter = (selectedMonths: string[], selectedQuarters: string[], quarter: 'Q1' | 'Q2' | 'Q3' | 'Q4'): string => {
+    if (!selectedMonths && !selectedQuarters) return '-';
     
-    exportToExcel(
-      tableRowsData,
-      `plan-${new Date().toISOString().slice(0, 10)}`,
-      'en',
-      {
-        organization: organizationName,
-        planner: plannerName,
-        fromDate,
-        toDate,
-        planType: planType
+    try {
+      // If quarters are selected, show all months in that quarter
+      if (selectedQuarters && selectedQuarters.includes(quarter)) {
+        const quarterMonths = MONTHS
+          .filter(month => month.quarter === quarter)
+          .map(month => month.value);
+        return quarterMonths.join(', ');
       }
-    );
+      
+      // If individual months are selected, show only selected months for that quarter
+      if (selectedMonths && selectedMonths.length > 0) {
+        const quarterMonths = MONTHS
+          .filter(month => month.quarter === quarter && selectedMonths.includes(month.value))
+          .map(month => month.value);
+        return quarterMonths.length > 0 ? quarterMonths.join(', ') : '-';
+      }
+    } catch (error) {
+      console.error('PlanReviewTable: Error in getMonthsForQuarter:', error);
+    }
+    
+    return '-';
   };
 
-  const handleExportPDF = () => {
     if (!processedObjectives || processedObjectives.length === 0) {
       console.error('PlanReviewTable: No objectives data available for export');
       return;
@@ -937,20 +1070,450 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
     
     console.log('PlanReviewTable: Exporting to PDF...');
     // Convert processed objectives to table rows format first
-    const tableRowsData = convertObjectivesToTableRows(processedObjectives);
-    
-    exportToPDF(
-      tableRowsData,
-      `plan-${new Date().toISOString().slice(0, 10)}`,
-      'en',
-      {
-        organization: organizationName,
-        planner: plannerName,
-        fromDate,
-        toDate,
-        planType: planType
-      }
+  // PRODUCTION-SAFE: Format date safely
+  const formatDate = (dateString: string | null | undefined) => {
+    if (!dateString) return 'N/A';
+    try {
+      return format(new Date(dateString), 'MMM d, yyyy');
+    } catch (e) {
+      console.error('PlanReviewTable: Error formatting date:', e);
+      return 'Invalid date';
+    }
+  };
+
+  // Toggle functions for expand/collapse
+  const toggleObjectiveExpand = (objectiveId: string) => {
+    setExpandedObjectives(prev => ({
+      ...prev,
+      [objectiveId]: !prev[objectiveId]
+    }));
+  };
+
+  const toggleInitiativeExpand = (initiativeId: string) => {
+    setExpandedInitiatives(prev => ({
+      ...prev,
+      [initiativeId]: !prev[initiativeId]
+    }));
+  };
+
+  // PRODUCTION-SAFE: Handle export functions
+  const handleExportExcel = () => {
+    try {
+      const dataFormatted = processDataForExport(processedObjectives, 'en');
+      exportToExcel(
+        dataFormatted,
+        `moh-plan-${new Date().toISOString().slice(0, 10)}`,
+        'en',
+        {
+          organization: organizationName,
+          planner: plannerName,
+          fromDate: fromDate,
+          toDate: toDate,
+          planType: planType
+        }
+      );
+    } catch (error) {
+      console.error('PlanReviewTable: Export Excel error:', error);
+    }
+  };
+
+  const handleExportPDF = () => {
+    try {
+      const dataFormatted = processDataForExport(processedObjectives, 'en');
+      exportToPDF(
+        dataFormatted,
+        `moh-plan-${new Date().toISOString().slice(0, 10)}`,
+        'en',
+        {
+          organization: organizationName,
+          planner: plannerName,
+          fromDate: fromDate,
+          toDate: toDate,
+          planType: planType
+        }
+      );
+    } catch (error) {
+      console.error('PlanReviewTable: Export PDF error:', error);
+    }
+  };
+
+  // PRODUCTION-SAFE: Loading state
+  if (isLoadingFreshData) {
+    return (
+      <div className="p-12 text-center">
+        <Loader className="h-10 w-10 mx-auto text-green-500 animate-spin" />
+        <p className="mt-4 text-gray-600 text-lg">Loading latest plan data...</p>
+        <p className="mt-2 text-sm text-gray-500">Fetching fresh objectives, initiatives, and activities...</p>
+      </div>
     );
+  }
+
+  // PRODUCTION-SAFE: Error state with fallback
+  if (dataProcessingError) {
+    return (
+      <div className="p-6 text-center">
+        <div className="rounded-full bg-yellow-100 p-4 w-16 h-16 mx-auto mb-4 flex items-center justify-center">
+          <AlertCircle className="h-8 w-8 text-yellow-500" />
+        </div>
+        <h3 className="text-lg font-medium text-yellow-800 mb-2">Data Refresh Issue</h3>
+        <p className="text-yellow-600 mb-4">{dataProcessingError}</p>
+        <button
+          onClick={handleManualRefresh}
+          className="px-4 py-2 bg-yellow-100 text-yellow-700 rounded-md hover:bg-yellow-200"
+        >
+          <RefreshCw className="h-4 w-4 inline mr-2" />
+          Try Refresh Again
+        </button>
+      </div>
+    );
+  }
+
+  // PRODUCTION-SAFE: Empty state
+  if (!processedObjectives || processedObjectives.length === 0) {
+    return (
+      <div className="p-8 text-center bg-yellow-50 rounded-lg border border-yellow-200">
+        <Info className="h-10 w-10 text-yellow-500 mx-auto mb-4" />
+        <h3 className="text-lg font-medium text-yellow-800 mb-2">No Plan Data Available</h3>
+        <p className="text-yellow-700 mb-4">No objectives found for this plan.</p>
+        <button
+          onClick={handleManualRefresh}
+          className="px-4 py-2 bg-yellow-100 text-yellow-700 rounded-md hover:bg-yellow-200"
+        >
+  return (
+    <div className="space-y-6">
+      {/* Plan Header Information */}
+      <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+          <div>
+            <span className="text-gray-500">Organization:</span>
+            <p className="font-medium text-gray-900">{organizationName}</p>
+          </div>
+          <div>
+            <span className="text-gray-500">Planner:</span>
+            <p className="font-medium text-gray-900">{plannerName}</p>
+          </div>
+          <div>
+            <span className="text-gray-500">Period:</span>
+            <p className="font-medium text-gray-900">{formatDate(fromDate)} - {formatDate(toDate)}</p>
+          </div>
+          <div>
+            <span className="text-gray-500">Type:</span>
+            <p className="font-medium text-gray-900">{planType}</p>
+          </div>
+        </div>
+        
+        {/* Refresh button */}
+        <div className="mt-4 flex justify-between items-center">
+          <div className="text-sm text-gray-600">
+            Showing data for organization ID: {userOrgId || 'Not set'}
+          </div>
+          <button
+            onClick={handleManualRefresh}
+            disabled={isLoadingFreshData}
+            className="flex items-center px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50"
+          >
+            {isLoadingFreshData ? (
+              <>
+                <Loader className="h-4 w-4 mr-2 animate-spin" />
+                Refreshing...
+              </>
+            ) : (
+              <>
+                <RefreshCw className="h-4 w-4 mr-2" />
+                Refresh Data
+              </>
+            )}
+          </button>
+        </div>
+      </div>
+
+      {/* Export buttons */}
+      {!isViewOnly && (
+        <div className="flex justify-end space-x-3">
+          <button
+            onClick={handleExportExcel}
+            disabled={processedObjectives.length === 0}
+            className="flex items-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
+          >
+            <FileSpreadsheet className="h-4 w-4 mr-2" />
+            Export Excel
+          </button>
+        </div>
+      )}
+
+      {/* Plan Content */}
+      <div className="space-y-6">
+        {processedObjectives.map((objective, objIndex) => {
+          if (!objective) return null;
+          
+          const effectiveWeight = objective.effective_weight || objective.planner_weight || objective.weight;
+          const isObjectiveExpanded = expandedObjectives[objective.id] || false;
+          
+          return (
+            <div key={objective.id} className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+              {/* Objective Header */}
+              <div 
+                className="bg-blue-50 px-6 py-4 border-b border-gray-200 cursor-pointer hover:bg-blue-100 transition-colors"
+                onClick={() => toggleObjectiveExpand(objective.id.toString())}
+              >
+                <div className="flex justify-between items-center">
+                  <div>
+                    <h3 className="text-lg font-medium text-blue-900">
+                      {objIndex + 1}. {objective.title}
+                    </h3>
+                    <p className="text-sm text-blue-700 mt-1">{objective.description}</p>
+                  </div>
+                  <div className="flex items-center space-x-4">
+                    <div className="text-right">
+                      <div className="text-sm text-blue-600">Weight</div>
+                      <div className="text-xl font-bold text-blue-800">{effectiveWeight}%</div>
+                    </div>
+                    <div className="text-blue-600">
+                      {isObjectiveExpanded ? '▼' : '▶'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Objective Content */}
+              {isObjectiveExpanded && (
+                <div className="p-6">
+                  {!objective.initiatives || objective.initiatives.length === 0 ? (
+                    <div className="text-center py-8 text-gray-500">
+                      <Info className="h-8 w-8 mx-auto mb-2 text-gray-400" />
+                      <p>No initiatives found for this objective</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-6">
+                      {objective.initiatives.map((initiative, initIndex) => {
+                        if (!initiative) return null;
+                        
+                        const isInitiativeExpanded = expandedInitiatives[initiative.id] || false;
+                        const performanceMeasures = initiative.performance_measures || [];
+                        const mainActivities = initiative.main_activities || [];
+                        
+                        return (
+                          <div key={initiative.id} className="border border-gray-200 rounded-lg">
+                            {/* Initiative Header */}
+                            <div 
+                              className="bg-green-50 px-4 py-3 border-b border-gray-200 cursor-pointer hover:bg-green-100 transition-colors"
+                              onClick={() => toggleInitiativeExpand(initiative.id)}
+                            >
+                              <div className="flex justify-between items-center">
+                                <div>
+                                  <h4 className="font-medium text-green-900">
+                                    {objIndex + 1}.{initIndex + 1} {initiative.name}
+                                  </h4>
+                                  <p className="text-sm text-green-700">
+                                    Organization: {initiative.organization_name || 'Ministry of Health'}
+                                  </p>
+                                </div>
+                                <div className="flex items-center space-x-4">
+                                  <div className="text-right">
+                                    <div className="text-sm text-green-600">Weight</div>
+                                    <div className="text-lg font-bold text-green-800">{initiative.weight}%</div>
+                                  </div>
+                                  <div className="text-green-600">
+                                    {isInitiativeExpanded ? '▼' : '▶'}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Initiative Content */}
+                            {isInitiativeExpanded && (
+                              <div className="p-4">
+                                {/* Performance Measures */}
+                                {performanceMeasures.length > 0 && (
+                                  <div className="mb-6">
+                                    <h5 className="text-md font-medium text-purple-700 mb-3">
+                                      Performance Measures ({performanceMeasures.length})
+                                    </h5>
+                                    <div className="grid gap-3">
+                                      {performanceMeasures.map((measure, measureIndex) => (
+                                        <div key={measure.id} className="bg-purple-50 p-3 rounded border border-purple-200">
+                                          <div className="flex justify-between items-start">
+                                            <div className="flex-1">
+                                              <h6 className="font-medium text-purple-900">
+                                                PM {measureIndex + 1}: {measure.name}
+                                              </h6>
+                                              <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-2 text-sm text-purple-700">
+                                                <div>Weight: {measure.weight}%</div>
+                                                <div>Baseline: {measure.baseline || 'N/A'}</div>
+                                                <div>Annual: {measure.annual_target || 0}</div>
+                                                <div>Type: {measure.target_type || 'cumulative'}</div>
+                                              </div>
+                                              <div className="grid grid-cols-4 gap-2 mt-2 text-xs text-purple-600">
+                                                <div>
+                                                  <div className="font-medium">Q1: {measure.q1_target || 0}</div>
+                                                  <div className="text-purple-500">{getMonthsForQuarter(measure.selected_months || [], measure.selected_quarters || [], 'Q1')}</div>
+                                                </div>
+                                                <div>
+                                                  <div className="font-medium">Q2: {measure.q2_target || 0}</div>
+                                                  <div className="text-purple-500">{getMonthsForQuarter(measure.selected_months || [], measure.selected_quarters || [], 'Q2')}</div>
+                                                </div>
+                                                <div>
+                                                  <div className="font-medium">Q3: {measure.q3_target || 0}</div>
+                                                  <div className="text-purple-500">{getMonthsForQuarter(measure.selected_months || [], measure.selected_quarters || [], 'Q3')}</div>
+                                                </div>
+                                                <div>
+                                                  <div className="font-medium">Q4: {measure.q4_target || 0}</div>
+                                                  <div className="text-purple-500">{getMonthsForQuarter(measure.selected_months || [], measure.selected_quarters || [], 'Q4')}</div>
+                                                </div>
+                                              </div>
+                                            </div>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* Main Activities */}
+                                {mainActivities.length > 0 && (
+                                  <div>
+                                    <h5 className="text-md font-medium text-orange-700 mb-3">
+                                      Main Activities ({mainActivities.length})
+                                    </h5>
+                                    <div className="grid gap-3">
+                                      {mainActivities.map((activity, activityIndex) => {
+                                        const budgetData = calculateActivityBudget(activity);
+                                        const sixMonthTarget = activity.target_type === 'cumulative' 
+                                          ? Number(activity.q1_target || 0) + Number(activity.q2_target || 0) 
+                                          : Number(activity.q2_target || 0);
+
+                                        return (
+                                          <div key={activity.id} className="bg-orange-50 p-4 rounded border border-orange-200">
+                                            <div className="flex justify-between items-start mb-3">
+                                              <div className="flex-1">
+                                                <h6 className="font-medium text-orange-900">
+                                                  MA {activityIndex + 1}: {activity.name}
+                                                </h6>
+                                                <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-2 text-sm text-orange-700">
+                                                  <div>Weight: {activity.weight}%</div>
+                                                  <div>Baseline: {activity.baseline || 'N/A'}</div>
+                                                  <div>Annual: {activity.annual_target || 0}</div>
+                                                  <div>Type: {activity.target_type || 'cumulative'}</div>
+                                                </div>
+                                                <div className="grid grid-cols-5 gap-2 mt-2 text-xs text-orange-600">
+                                                  <div>
+                                                    <div className="font-medium">Q1: {activity.q1_target || 0}</div>
+                                                    <div className="text-orange-500">{getMonthsForQuarter(activity.selected_months || [], activity.selected_quarters || [], 'Q1')}</div>
+                                                  </div>
+                                                  <div>
+                                                    <div className="font-medium">Q2: {activity.q2_target || 0}</div>
+                                                    <div className="text-orange-500">{getMonthsForQuarter(activity.selected_months || [], activity.selected_quarters || [], 'Q2')}</div>
+                                                  </div>
+                                                  <div>
+                                                    <div className="font-medium">6M: {sixMonthTarget}</div>
+                                                    <div className="text-orange-500">Target</div>
+                                                  </div>
+                                                  <div>
+                                                    <div className="font-medium">Q3: {activity.q3_target || 0}</div>
+                                                    <div className="text-orange-500">{getMonthsForQuarter(activity.selected_months || [], activity.selected_quarters || [], 'Q3')}</div>
+                                                  </div>
+                                                  <div>
+                                                    <div className="font-medium">Q4: {activity.q4_target || 0}</div>
+                                                    <div className="text-orange-500">{getMonthsForQuarter(activity.selected_months || [], activity.selected_quarters || [], 'Q4')}</div>
+                                                  </div>
+                                                </div>
+                                              </div>
+                                            </div>
+
+                                            {/* Budget Information */}
+                                            {budgetData.budgetRequired > 0 && (
+                                              <div className="mt-3 pt-3 border-t border-orange-200">
+                                                <h6 className="text-sm font-medium text-orange-800 mb-2">Budget Information</h6>
+                                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
+                                                  <div>
+                                                    <div className="text-orange-600">Required</div>
+                                                    <div className="font-medium">${budgetData.budgetRequired.toLocaleString()}</div>
+                                                  </div>
+                                                  <div>
+                                                    <div className="text-orange-600">Government</div>
+                                                    <div className="font-medium">${budgetData.government.toLocaleString()}</div>
+                                                  </div>
+                                                  <div>
+                                                    <div className="text-orange-600">Partners</div>
+                                                    <div className="font-medium">${budgetData.partners.toLocaleString()}</div>
+                                                  </div>
+                                                  <div>
+                                                    <div className="text-orange-600">Gap</div>
+                                                    <div className={`font-medium ${budgetData.gap > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                                                      ${budgetData.gap.toLocaleString()}
+                                                    </div>
+                                                  </div>
+                                                </div>
+                                                
+                                                {/* Sub-activities count */}
+                                                {activity.sub_activities && activity.sub_activities.length > 0 && (
+                                                  <div className="mt-2 text-xs text-orange-600">
+                                                    Sub-activities: {activity.sub_activities.length}
+                                                    {activity.sub_activities.map((sub, i) => (
+                                                      <span key={sub.id} className="ml-2 bg-orange-200 px-1 rounded">
+                                                        {sub.activity_type}
+                                                      </span>
+                                                    ))}
+                                                  </div>
+                                                )}
+                                              </div>
+                                            )}
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* No content message */}
+                                {performanceMeasures.length === 0 && mainActivities.length === 0 && (
+                                  <div className="text-center py-6 text-gray-500">
+                                    <Info className="h-6 w-6 mx-auto mb-2 text-gray-400" />
+                                    <p>No performance measures or main activities found for this initiative</p>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Submit button for non-preview mode */}
+      {!isPreviewMode && !isViewOnly && (
+        <div className="flex justify-end pt-6 border-t border-gray-200">
+          <button
+            onClick={() => onSubmit(processedObjectives)}
+            disabled={isSubmitting || processedObjectives.length === 0}
+            className="flex items-center px-6 py-3 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
+          >
+            {isSubmitting ? (
+              <>
+                <Loader className="h-4 w-4 mr-2 animate-spin" />
+                Submitting...
+              </>
+            ) : (
+              <>
+                <CheckCircle className="h-4 w-4 mr-2" />
+                Submit for Review
+              </>
+            )}
+          </button>
+        </div>
+      }
+    </div>
+  );
+};
+
+export default PlanReviewTable;
+
   };
 
   // PRODUCTION-SAFE: Calculate totals with the new method
@@ -1587,5 +2150,4 @@ const PlanReviewTable: React.FC<PlanReviewTableProps> = ({
     </div>
   );
 };
-
-export default PlanReviewTable;
+import { X, FileSpreadsheet, File as FilePdf, RefreshCw, AlertCircle, Info, Loader, CheckCircle } from 'lucide-react';
