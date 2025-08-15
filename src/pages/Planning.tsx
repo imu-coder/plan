@@ -481,24 +481,6 @@ const Planning: React.FC = () => {
     }, []), []
   );
 
-  // Core state
-  
-  // PRODUCTION FIX: Add review-specific state for fresh data
-  const [reviewRefreshKey, setReviewRefreshKey] = useState(0);
-  const [isLoadingReviewData, setIsLoadingReviewData] = useState(false);
-  const [optimisticUpdates, setOptimisticUpdates] = useState<Set<string>>(new Set());
-
-  // PRODUCTION OPTIMIZATION: Debounced refresh to prevent excessive API calls
-  const debouncedRefresh = useCallback(
-    useMemo(() => {
-      let timeoutId: NodeJS.Timeout;
-      return () => {
-        clearTimeout(timeoutId);
-        timeoutId = setTimeout(() => setRefreshKey(prev => prev + 1), 300);
-      };
-    }, []), []
-  );
-
   // Check for existing plans on component mount
   useEffect(() => {
     const checkExistingPlans = async () => {
@@ -767,19 +749,6 @@ const Planning: React.FC = () => {
       setShowInitiativeForm(false);
       setEditingInitiative(null);
     }, 'Initiative saved successfully', 'initiative');
-      setEditingInitiative(null);
-      
-      // Remove optimistic update
-      setOptimisticUpdates(prev => {
-        const newSet = new Set(prev);
-        newSet.delete(updateId);
-        return newSet;
-      });
-    } catch (error: any) {
-      console.error('Failed to save initiative:', error);
-      setError(error.message || 'Failed to save initiative');
-      setSuccess(null);
-    }
   };
 
   // Performance measure CRUD handlers
@@ -798,16 +767,6 @@ const Planning: React.FC = () => {
       setShowMeasureForm(false);
       setEditingMeasure(null);
     }, 'Performance measure saved successfully', 'measure');
-      setOptimisticUpdates(prev => {
-        const newSet = new Set(prev);
-        newSet.delete(updateId);
-        return newSet;
-      });
-    } catch (error: any) {
-      console.error('Failed to save performance measure:', error);
-      setError(error.message || 'Failed to save performance measure');
-      setSuccess(null);
-    }
   };
 
   // Main activity CRUD handlers
@@ -826,16 +785,6 @@ const Planning: React.FC = () => {
       setShowActivityForm(false);
       setEditingActivity(null);
     }, 'Main activity saved successfully', 'activity');
-      setOptimisticUpdates(prev => {
-        const newSet = new Set(prev);
-        newSet.delete(updateId);
-        return newSet;
-      });
-    } catch (error: any) {
-      console.error('Failed to save main activity:', error);
-      setError(error.message || 'Failed to save main activity');
-      setSuccess(null);
-    }
   };
 
   // Budget handlers
@@ -892,62 +841,6 @@ const Planning: React.FC = () => {
       setEditingBudget(null);
       setCostingToolData(null);
     }, 'Budget saved successfully', 'budget');
-      setSuccess(null);
-    }
-  };
-
-  // PRODUCTION FIX: Enhanced review handler with fresh data loading
-  const handleReviewPlan = async () => {
-    try {
-      setIsLoadingReviewData(true);
-      setError(null);
-      
-      console.log('Planning: Preparing review with fresh data...');
-      
-      // Increment refresh key to trigger fresh data fetch in PlanReviewTable
-      setReviewRefreshKey(prev => prev + 1);
-      
-      // Small delay to ensure data starts loading
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
-      setCurrentStep('review');
-      
-      console.log('Planning: Review step activated with refreshKey:', reviewRefreshKey + 1);
-    } catch (error) {
-      console.error('Error preparing review:', error);
-      setError('Failed to prepare plan review');
-    } finally {
-      // Keep loading state until PlanReviewTable indicates it's ready
-      setTimeout(() => setIsLoadingReviewData(false), 1000);
-    }
-  };
-
-  // PRODUCTION FIX: Callback for when review data is refreshed
-  const handleReviewDataRefresh = useCallback((refreshedData: StrategicObjective[]) => {
-    console.log('Planning: Received refreshed data from PlanReviewTable:', refreshedData.length);
-    
-    // Update our objectives state with the fresh data while preserving custom weights
-    setSelectedObjectives(refreshedData);
-    setIsLoadingReviewData(false);
-  }, []);
-
-  // PRODUCTION FIX: Manual refresh handler for review step
-  const handleManualRefreshReview = async () => {
-    try {
-      setIsLoadingReviewData(true);
-      console.log('Planning: Manual refresh triggered for review');
-      
-      // Increment refresh key to trigger fresh data fetch
-      setReviewRefreshKey(prev => prev + 1);
-      
-      // Small delay for data loading
-      await new Promise(resolve => setTimeout(resolve, 500));
-    } catch (error) {
-      console.error('Error during manual refresh:', error);
-      setError('Failed to refresh plan data');
-    } finally {
-      setIsLoadingReviewData(false);
-    }
   };
 
   // Manual refresh handler for review step
@@ -959,6 +852,10 @@ const Planning: React.FC = () => {
     } finally {
       setIsLoadingReviewData(false);
     }
+  };
+
+  const handleSubmitPlan = async () => {
+    try {
       setIsSubmitting(true);
       setError(null);
       
@@ -1492,7 +1389,7 @@ const Planning: React.FC = () => {
               </button>
               <h2 className="text-xl font-semibold text-gray-900">Review Your Plan</h2>
               <button
-                onClick={handleManualRefreshReview}
+                onClick={handleRefreshReviewData}
                 disabled={isLoadingReviewData}
                 className="flex items-center px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50"
               >
@@ -1520,10 +1417,6 @@ const Planning: React.FC = () => {
               toDate={toDate}
               planType={selectedPlanType}
               userOrgId={userOrgId}
-              refreshKey={reviewRefreshKey}
-              onDataRefresh={handleReviewDataRefresh}
-              isLoadingReview={isLoadingReviewData}
-              onRefreshRequest={handleRefreshReviewData}
               refreshKey={reviewRefreshKey}
               onDataRefresh={handleReviewDataRefresh}
               isLoadingReview={isLoadingReviewData}
