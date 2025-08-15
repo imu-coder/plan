@@ -115,6 +115,11 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
       const updateData = { ...objectiveData };
       delete updateData.id;
       
+      // Call the actual API to update the objective
+      console.log('Calling API to update objective:', objectiveId, 'with data:', updateData);
+      const response = await objectives.update(objectiveId, updateData);
+      console.log('Objective update response:', response);
+      return response;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['objectives'] });
@@ -189,15 +194,26 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
         
         return {
           ...obj,
-          weight: obj.weight,
-          planner_weight: effectiveWeight,
+          weight: obj.is_default ? obj.weight : effectiveWeight, // Keep original weight for defaults
+          planner_weight: obj.is_default ? effectiveWeight : null, // Set planner_weight for defaults
           effective_weight: effectiveWeight
         };
       }).filter(Boolean); // Remove null entries
       
+      console.log('Passing objectives with weights to parent:', objectivesWithWeights.map(obj => ({
+        id: obj.id,
+        title: obj.title,
+        weight: obj.weight,
+        planner_weight: obj.planner_weight,
+        effective_weight: obj.effective_weight,
+        is_default: obj.is_default
+      })));
+      
       const currentDataString = JSON.stringify(objectivesWithWeights.map(obj => ({
         id: obj.id,
-        effective_weight: obj.effective_weight
+        effective_weight: obj.effective_weight,
+        planner_weight: obj.planner_weight,
+        is_default: obj.is_default
       })));
       
       if (currentDataString !== lastSentData) {
@@ -340,30 +356,26 @@ const HorizontalObjectiveSelector: React.FC<HorizontalObjectiveSelectorProps> = 
         setSaveProgress(null);
         return;
       }
+            // For default objectives, save the new weight as planner_weight
       
       // Execute updates in batches
       const BATCH_SIZE = 3;
       let completedOperations = 0;
-      
+                id: obj.id,
       for (let i = 0; i < saveOperations.length; i += BATCH_SIZE) {
-        const batch = saveOperations.slice(i, i + BATCH_SIZE);
-        
-        setSaveProgress({
-          current: completedOperations,
+                // Don't include other fields to avoid overwriting them
           total: saveOperations.length,
           message: `Saving objectives ${completedOperations + 1}-${Math.min(completedOperations + BATCH_SIZE, saveOperations.length)} of ${saveOperations.length}...`
         });
         
+            // For custom objectives, save the new weight as weight
         const batchPromises = batch.map(async (operation) => {
           try {
             console.log('Saving objective:', operation.id, operation.name, operation.data);
             
-            // Validate the operation has required data
+                id: obj.id,
             if (!operation.id || !operation.data) {
-              throw new Error(`Invalid operation data for ${operation.name}`);
-            }
-            
-            return await updateObjectiveMutation.mutateAsync(operation.data);
+                // Don't include other fields to avoid overwriting them
           } catch (error) {
             console.error(`Failed to save objective ${operation.name} (ID: ${operation.id}):`, error);
             throw new Error(`Failed to save "${operation.name}": ${error.message}`);
