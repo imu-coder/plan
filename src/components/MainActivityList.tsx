@@ -1,4 +1,4 @@
-```typescript
+
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { mainActivities, auth, subActivities } from '../lib/api';
@@ -1062,4 +1062,3 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
 };
 
 export default MainActivityList;
-```
