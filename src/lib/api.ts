@@ -1119,7 +1119,7 @@ export const mainActivities = {
           'Cache-Control': 'no-cache, no-store, must-revalidate',
           'Pragma': 'no-cache'
         }
-      });
+  getByInitiative: async (initiativeId: string) => {
       
       console.log('API: Main activities response received:', {
         status: response.status,
@@ -1246,7 +1246,7 @@ export const mainActivities = {
     console.log('API: Main activity created:', response.data);
     return response.data;
   },
-
+  },
   update: async (id: string, data: any) => {
     console.log('API: Updating main activity:', id, data);
     const response = await api.put(`/main-activities/${id}/`, data);
