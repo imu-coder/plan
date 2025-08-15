@@ -114,6 +114,7 @@ const PlanSummary: React.FC = () => {
   const [processedPlanData, setProcessedPlanData] = useState<Plan | null>(null);
   const [organizationsMap, setOrganizationsMap] = useState<Record<string, string>>({});
   const [plannerOrganizationName, setPlannerOrganizationName] = useState<string>('');
+  const [dataProcessingError, setDataProcessingError] = useState<string | null>(null);
 
   // Query hooks
   const { data: organizationsData } = useQuery({
@@ -129,6 +130,80 @@ const PlanSummary: React.FC = () => {
     },
     staleTime: 5 * 60 * 1000,
   });
+
+  // Production-safe data processing for plan data
+  const processAndFilterPlanData = (planData: any): Plan => {
+    try {
+      console.log('PlanSummary: Processing plan data for user org:', userOrganizations[0]);
+      
+      if (!planData) return planData;
+
+      const processed = normalizeAndProcessPlanData(planData);
+      
+      // Filter objectives and their content based on user organization
+      if (processed.objectives && Array.isArray(processed.objectives)) {
+        processed.objectives = processed.objectives.map(objective => {
+          if (!objective) return objective;
+
+          // Filter initiatives for user's organization
+          if (objective.initiatives && Array.isArray(objective.initiatives)) {
+            objective.initiatives = objective.initiatives
+              .filter(initiative => {
+                if (!initiative) return false;
+                
+                const isDefault = initiative.is_default === true;
+                const hasNoOrg = !initiative.organization || initiative.organization === null;
+                const belongsToUserOrg = userOrganizations[0] && initiative.organization && 
+                                        Number(initiative.organization) === Number(userOrganizations[0]);
+                
+                const shouldInclude = isDefault || hasNoOrg || belongsToUserOrg;
+                
+                console.log(`PlanSummary: Initiative "${initiative.name}" - org:${initiative.organization}, userOrg:${userOrganizations[0]}, include:${shouldInclude}`);
+                
+                return shouldInclude;
+              })
+              .map(initiative => {
+                if (!initiative) return initiative;
+
+                // Filter performance measures
+                if (initiative.performance_measures && Array.isArray(initiative.performance_measures)) {
+                  initiative.performance_measures = initiative.performance_measures.filter(measure => {
+                    if (!measure) return false;
+                    const hasNoOrg = !measure.organization || measure.organization === null;
+                    const belongsToUserOrg = userOrganizations[0] && measure.organization && 
+                                            Number(measure.organization) === Number(userOrganizations[0]);
+                    return hasNoOrg || belongsToUserOrg;
+                  });
+                }
+
+                // Filter main activities
+                if (initiative.main_activities && Array.isArray(initiative.main_activities)) {
+                  initiative.main_activities = initiative.main_activities.filter(activity => {
+                    if (!activity) return false;
+                    const hasNoOrg = !activity.organization || activity.organization === null;
+                    const belongsToUserOrg = userOrganizations[0] && activity.organization && 
+                                            Number(activity.organization) === Number(userOrganizations[0]);
+                    return hasNoOrg || belongsToUserOrg;
+                  });
+                }
+
+                return initiative;
+              });
+          }
+
+          return objective;
+        });
+      }
+
+      console.log('PlanSummary: Successfully processed and filtered plan data');
+      return processed;
+      
+    } catch (error) {
+      console.error('PlanSummary: Error processing plan data:', error);
+      setDataProcessingError('Failed to process plan data for your organization');
+      throw error;
+    }
+  };
 
   const { data: planData, isLoading, error, refetch } = useQuery({
     queryKey: ['plan', planId, retryCount],
@@ -155,11 +230,11 @@ const PlanSummary: React.FC = () => {
           });
 
           if (!response.data) throw new Error('No data received');
-          return normalizeAndProcessPlanData(response.data);
+          return processAndFilterPlanData(response.data);
         } catch (directError) {
           const planResult = await plans.getById(planId);
           if (!planResult) throw new Error('No data received');
-          return normalizeAndProcessPlanData(planResult);
+          return processAndFilterPlanData(planResult);
         }
       } catch (error: any) {
         setLoadingError(error.message || 'Failed to load plan');
@@ -261,7 +336,7 @@ const PlanSummary: React.FC = () => {
             const org = organizationsData.data.find((o: Organization) => String(o.id) === String(planData.organization));
             if (org) {
               setOrganizationName(org.name);
-              setPlannerOrganizationName(planData.organizationName);
+              setPlannerOrganizationName(org.name);
               return;
             }
           }
@@ -269,7 +344,6 @@ const PlanSummary: React.FC = () => {
           setOrganizationName('Unknown Organization');
         } catch (e) {
           console.error('Error setting organization name:', e);
-                setPlannerOrganizationName(org.name);
           setOrganizationName('Unknown Organization');
         }
       }
@@ -365,18 +439,20 @@ const PlanSummary: React.FC = () => {
       processedPlanData.objectives.forEach((objective) => {
         objective.initiatives?.forEach((initiative) => {
           initiative.main_activities?.forEach((activity) => {
-            if (!activity?.budget) return;
+            // Calculate from sub-activities instead of legacy budget
+            if (activity.sub_activities && Array.isArray(activity.sub_activities)) {
+              activity.sub_activities.forEach(subActivity => {
+                const cost = subActivity.budget_calculation_type === 'WITH_TOOL'
+                  ? Number(subActivity.estimated_cost_with_tool || 0)
+                  : Number(subActivity.estimated_cost_without_tool || 0);
 
-            const cost =
-              activity.budget.budget_calculation_type === 'WITH_TOOL'
-                ? Number(activity.budget.estimated_cost_with_tool || 0)
-                : Number(activity.budget.estimated_cost_without_tool || 0);
-
-            total += cost;
-            governmentTotal += Number(activity.budget.government_treasury || 0);
-            sdgTotal += Number(activity.budget.sdg_funding || 0);
-            partnersTotal += Number(activity.budget.partners_funding || 0);
-            otherTotal += Number(activity.budget.other_funding || 0);
+                total += cost;
+                governmentTotal += Number(subActivity.government_treasury || 0);
+                sdgTotal += Number(subActivity.sdg_funding || 0);
+                partnersTotal += Number(subActivity.partners_funding || 0);
+                otherTotal += Number(subActivity.other_funding || 0);
+              });
+            }
           });
         });
       });
@@ -448,7 +524,13 @@ const PlanSummary: React.FC = () => {
             (measure) => !measure.organization || measure.organization === userOrgId
           );
           const mainActivities = (initiative.main_activities || []).filter(
-            (activity) => !activity.organization || activity.organization === userOrgId
+            (activity) => {
+              if (!activity) return false;
+              const hasNoOrg = !activity.organization || activity.organization === null;
+              const belongsToUserOrg = userOrgId && activity.organization && 
+                                      Number(activity.organization) === Number(userOrgId);
+              return hasNoOrg || belongsToUserOrg;
+            }
           );
 
           console.log(`Initiative ${initiative.name}: ${performanceMeasures.length} measures, ${mainActivities.length} activities for user org`);
@@ -500,16 +582,20 @@ const PlanSummary: React.FC = () => {
               let totalAvailable = 0;
               let gap = 0;
 
-              if (!isPerformanceMeasure && item.budget) {
-                budgetRequired =
-                  item.budget.budget_calculation_type === 'WITH_TOOL'
-                    ? Number(item.budget.estimated_cost_with_tool || 0)
-                    : Number(item.budget.estimated_cost_without_tool || 0);
+              // Calculate budget from sub-activities for main activities
+              if (!isPerformanceMeasure && item.sub_activities && Array.isArray(item.sub_activities)) {
+                item.sub_activities.forEach(subActivity => {
+                  const cost = subActivity.budget_calculation_type === 'WITH_TOOL'
+                    ? Number(subActivity.estimated_cost_with_tool || 0)
+                    : Number(subActivity.estimated_cost_without_tool || 0);
 
-                government = Number(item.budget.government_treasury || 0);
-                partners = Number(item.budget.partners_funding || 0);
-                sdg = Number(item.budget.sdg_funding || 0);
-                other = Number(item.budget.other_funding || 0);
+                  budgetRequired += cost;
+                  government += Number(subActivity.government_treasury || 0);
+                  partners += Number(subActivity.partners_funding || 0);
+                  sdg += Number(subActivity.sdg_funding || 0);
+                  other += Number(subActivity.other_funding || 0);
+                });
+                
                 totalAvailable = government + partners + sdg + other;
                 gap = Math.max(0, budgetRequired - totalAvailable);
               }
@@ -548,11 +634,9 @@ const PlanSummary: React.FC = () => {
                 'Gap': gap || '-',
               });
 
-            setPlannerOrganizationName('Unknown Organization');
               objectiveAdded = true;
               initiativeAddedForObjective = true;
             });
-            setPlannerOrganizationName('Unknown Organization');
           }
         });
       }
@@ -692,6 +776,33 @@ const PlanSummary: React.FC = () => {
       <div className="flex items-center justify-center min-h-[60vh]">
         <Loader className="h-6 w-6 animate-spin mr-2 text-green-600" />
         <span className="text-lg">Loading plan details...</span>
+      </div>
+    );
+  }
+
+  if (dataProcessingError) {
+    return (
+      <div className="p-8 bg-red-50 border border-red-200 rounded-lg text-center">
+        <AlertCircle className="h-12 w-12 text-red-500 mx-auto mb-4" />
+        <h3 className="text-lg font-medium text-red-800">Data Processing Error</h3>
+        <p className="text-red-600 mt-2">{dataProcessingError}</p>
+        <div className="mt-6 flex justify-center space-x-4">
+          <button
+            onClick={() => {
+              setDataProcessingError(null);
+              handleRetry();
+            }}
+            className="px-4 py-2 bg-white border border-red-300 rounded-md text-red-700 hover:bg-red-50"
+          >
+            Try Again
+          </button>
+          <button
+            onClick={() => navigate(-1)}
+            className="px-4 py-2 bg-white border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
+          >
+            Go Back
+          </button>
+        </div>
       </div>
     );
   }
@@ -966,9 +1077,21 @@ const PlanSummary: React.FC = () => {
               <h3 className="text-sm font-medium text-gray-500">Total Activities</h3>
               <p className="mt-2 text-3xl font-semibold text-gray-900">
                 {processedPlanData.objectives?.reduce(
-                  (total: number, obj) =>
-                    total +
-                    (obj?.initiatives?.reduce((sum: number, init) => sum + (init?.main_activities?.length || 0), 0) || 0),
+                  (total: number, obj) => {
+                    if (!obj?.initiatives) return total;
+                    return total + obj.initiatives.reduce((sum: number, init) => {
+                      if (!init?.main_activities) return sum;
+                      // Only count activities for user's organization
+                      const userActivities = init.main_activities.filter(activity => {
+                        if (!activity) return false;
+                        const hasNoOrg = !activity.organization || activity.organization === null;
+                        const belongsToUserOrg = userOrganizations[0] && activity.organization && 
+                                                Number(activity.organization) === Number(userOrganizations[0]);
+                        return hasNoOrg || belongsToUserOrg;
+                      });
+                      return sum + userActivities.length;
+                    }, 0);
+                  },
                   0
                 ) || 0}
               </p>
