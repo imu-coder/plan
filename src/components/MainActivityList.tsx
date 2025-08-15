@@ -1,3 +1,4 @@
+```typescript
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { mainActivities, auth, subActivities } from '../lib/api';
@@ -101,16 +102,19 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
         
         // Log each activity for debugging
         activities.forEach((activity, index) => {
+          console.log(`Activity ${index + 1}: "${activity.name}" (ID: ${activity.id}, Org: ${activity.organization || 'none'})`);
+        });
+        
         if (!response) {
           console.log('MainActivityList: No response from API');
           return { data: [] };
         }
         
-        const activities = Array.isArray(response.data) ? response.data : [];
-        console.log(`MainActivityList: Processed ${activities.length} activities from response`);
+        const activities2 = Array.isArray(response.data) ? response.data : [];
+        console.log(`MainActivityList: Processed ${activities2.length} activities from response`);
         
         // Log each activity for production debugging
-        activities.forEach((activity, index) => {
+        activities2.forEach((activity, index) => {
           console.log(`Activity ${index + 1}: "${activity.name}" (ID: ${activity.id}, Org: ${activity.organization || 'none'})`);
         });
         
@@ -123,7 +127,6 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
     enabled: !!initiativeId && userOrgId !== null,
     staleTime: 30000, // 30 seconds cache for production stability
     refetchOnWindowFocus: false,
-    retry: 1,
     retry: 1,
     refetchInterval: false,
     refetchOnReconnect: true
@@ -161,16 +164,19 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
         console.log('MainActivityList: Refreshing after sub-activity update');
         refetch();
       }, 200);
+      setTimeout(() => {
         refetch();
       }, 100);
       closeAllModals();
     },
+    onError: (error) => {
       console.error('Failed to update sub-activity:', error);
     }
   });
 
   // Delete activity mutation with immediate cache update
   const deleteActivityMutation = useMutation({
+    mutationFn: (activityId: string) => mainActivities.delete(activityId),
     onSuccess: (result) => {
       // PRODUCTION FIX: Gentle refresh without invalidating cache
       setTimeout(() => {
@@ -178,13 +184,15 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
         refetch();
       }, 200);
     },
+    onError: (error) => {
+      console.error('Failed to delete activity:', error);
     }
   });
 
   // Manual refresh function
   const handleManualRefresh = () => {
     console.log('MainActivityList: Manual refresh triggered');
-    onSuccess: (result) => {
+    refetch();
   };
 
   // PRODUCTION-SAFE: Comprehensive data validation and logging
@@ -195,7 +203,6 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
     dataLength: Array.isArray(activitiesData) ? activitiesData.length : 0,
     userOrgId,
     initiativeId,
-    isLoading,
     isLoading,
     hasError: !!error
   });
@@ -223,13 +230,13 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
                              Number(activity.organization) === Number(userOrgId));
     
     const isDefaultActivity = activity.is_default === true;
+    const isDefault = activity.is_default === true;
     
     // Show if: no org, belongs to user, or is default
     const shouldInclude = hasNoOrganization || belongsToUserOrg || isDefaultActivity;
-    const isDefault = activity.is_default === true;
     
     // Show activity if: no org specified, belongs to user org, or is default
-    const shouldInclude = hasNoOrganization || belongsToUserOrg || isDefault;
+    const shouldInclude2 = hasNoOrganization || belongsToUserOrg || isDefault;
     
     console.log(`MainActivityList: "${activity.name}" - org:${activity.organization}, userOrg:${userOrgId}, noOrg:${hasNoOrganization}, belongsToUser:${belongsToUserOrg}, isDefault:${isDefaultActivity}, include:${shouldInclude}`);
     
@@ -239,10 +246,10 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
   console.log(`MainActivityList: FINAL RESULT - displaying ${displayActivities.length} of ${safeActivitiesData.length} activities`, {
     initiativeId,
     userOrgId,
-    userOrgId,
     totalFromAPI: safeActivitiesData.length,
     afterFiltering: displayActivities.length,
     isLoading
+  });
 
   // Close all modals
   const closeAllModals = () => {
@@ -1055,3 +1062,4 @@ const MainActivityList: React.FC<MainActivityListProps> = ({
 };
 
 export default MainActivityList;
+```
