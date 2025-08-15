@@ -277,13 +277,45 @@ class InitiativeFeedViewSet(viewsets.ModelViewSet):
         queryset = super().get_queryset()
         strategic_objective = self.request.query_params.get('strategic_objective', None)
         if strategic_objective is not None:
-            queryset = queryset.filter(strategic_objective=strategic_objective)
+            base_queryset = queryset.filter(strategic_objective=strategic_objective)
+            
+            if user_org:
+                # Show initiatives that are default OR belong to user's org OR have no org (legacy)
+                queryset = base_queryset.filter(
+                    models.Q(is_default=True) |
+                    models.Q(organization__isnull=True) |
+                    models.Q(organization=user_org)
+                )
+            else:
+                queryset = base_queryset
         return queryset
 
 # class InitiativeFeedViewSet(viewsets.ModelViewSet):
 #     queryset = InitiativeFeed.objects.filter(is_active=True)
-#     serializer_class = InitiativeFeedSerializer
+            base_queryset = queryset.filter(program=program)
+            
+            if user_org:
+                queryset = base_queryset.filter(
+                    models.Q(is_default=True) |
+                    models.Q(organization__isnull=True) |
+                    models.Q(organization=user_org)
+                )
+            else:
+                queryset = base_queryset
+        elif user_org and not strategic_objective:
+            # If no specific filters, still filter by organization
+            queryset = queryset.filter(
+                models.Q(is_default=True) |
+                models.Q(organization__isnull=True) |
+                models.Q(organization=user_org)
+            )
 #     permission_classes = [IsAuthenticated]
+        # Add proper ordering and select_related for performance
+        queryset = queryset.select_related('strategic_objective', 'program', 'organization').order_by('-created_at')
+        
+        console_log_message = f"StrategicInitiativeViewSet: Filtered queryset - objective:{strategic_objective}, program:{program}, user_org:{user_org}, count:{queryset.count()}"
+        print(console_log_message)
+        
     
 #     def get_permissions(self):
 #         if self.request.method == 'GET':
@@ -394,6 +426,13 @@ class ProgramViewSet(viewsets.ModelViewSet):
     
     def get_queryset(self):
         queryset = super().get_queryset()
+        
+        # Get current user's organization for filtering
+        user_org = None
+        if self.request.user.is_authenticated:
+            user_org_instance = self.request.user.organization_users.first()
+            if user_org_instance:
+                user_org = user_org_instance.organization_id
         
         # Filter by strategic objective if provided
         strategic_objective_id = self.request.query_params.get('strategic_objective')
