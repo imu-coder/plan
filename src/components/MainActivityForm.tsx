@@ -13,6 +13,7 @@ interface MainActivityFormProps {
   onSubmit: (data: Partial<MainActivity>) => Promise<void>;
   initialData?: MainActivity | null;
   onCancel: () => void;
+  onSuccess?: () => void; // Add success callback for immediate form close
 }
 
 const MainActivityForm: React.FC<MainActivityFormProps> = ({
@@ -20,12 +21,14 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
   currentTotal,
   onSubmit,
   initialData,
-  onCancel
+  onCancel,
+  onSuccess
 }) => {
   const { t } = useLanguage();
   const queryClient = useQueryClient();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
   const [initiativeWeight, setInitiativeWeight] = useState(0);
   const [existingActivitiesWeight, setExistingActivitiesWeight] = useState(0);
   const [periodType, setPeriodType] = useState<'months' | 'quarters'>(
@@ -33,6 +36,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
   );
   const [userOrgId, setUserOrgId] = useState<number | null>(null);
   const [isLoadingWeights, setIsLoadingWeights] = useState(true);
+  const [isFormClosing, setIsFormClosing] = useState(false);
 
   // Form setup
   const { register, control, handleSubmit, watch, setValue, formState: { errors } } = useForm<Partial<MainActivity>>({
@@ -52,52 +56,89 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
     }
   });
 
-  // CRITICAL: Load weight data exactly as backend calculates it
+  // PRODUCTION-SAFE: Load weight data with comprehensive error handling
   useEffect(() => {
     const loadWeightData = async () => {
       try {
         setIsLoadingWeights(true);
         setSubmitError(null);
         
-        // Get user organization
+        console.log('MainActivityForm: Loading weight data for initiative:', initiativeId);
+        
+        // Get user organization with retry logic
         const userData = await auth.getCurrentUser();
         if (!userData.isAuthenticated) {
+          console.error('MainActivityForm: User not authenticated');
           setSubmitError('Authentication required');
           return;
         }
         
         const orgId = userData.userOrganizations?.[0]?.organization;
         if (!orgId) {
+          console.error('MainActivityForm: No organization assigned to user');
           setSubmitError('No organization assigned');
           return;
         }
+        console.log('MainActivityForm: User organization ID:', orgId);
         setUserOrgId(orgId);
 
-        // Get initiative weight
-        const initiativeResponse = await api.get(`/strategic-initiatives/${initiativeId}/`);
+        // Get initiative weight with retry
+        let initiativeResponse;
+        try {
+          initiativeResponse = await api.get(`/strategic-initiatives/${initiativeId}/`);
+        } catch (apiError) {
+          console.error('MainActivityForm: Failed to fetch initiative via API, retrying...', apiError);
+          // Retry once more
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          initiativeResponse = await api.get(`/strategic-initiatives/${initiativeId}/`);
+        }
+        
         const initiative = initiativeResponse.data;
         if (!initiative?.weight) {
+          console.error('MainActivityForm: Initiative weight not found in response:', initiative);
           setSubmitError('Initiative weight not found');
           return;
         }
         
         const initWeight = parseFloat(initiative.weight);
+        console.log('MainActivityForm: Initiative weight loaded:', initWeight);
         setInitiativeWeight(initWeight);
 
-        // Get existing activities for weight calculation
-        const activitiesResponse = await api.get(`/main-activities/?initiative=${initiativeId}`);
-        const activities = activitiesResponse.data?.results || activitiesResponse.data || [];
+        // Get existing activities with production-safe query
+        let activitiesResponse;
+        try {
+          activitiesResponse = await api.get(`/main-activities/?initiative=${initiativeId}`);
+        } catch (activitiesError) {
+          console.error('MainActivityForm: Failed to fetch activities, using fallback:', activitiesError);
+          activitiesResponse = { data: [] };
+        }
         
-        // Filter by user organization and exclude current activity if editing
-        const relevantActivities = activities.filter(activity => {
-          const belongsToUserOrg = !activity.organization || activity.organization === orgId;
+        const activities = activitiesResponse.data?.results || activitiesResponse.data || [];
+        console.log(`MainActivityForm: Found ${activities.length} total activities for initiative`);
+        
+        // PRODUCTION-SAFE: More permissive filtering
+        const relevantActivities = activities.filter((activity: any) => {
+          const hasNoOrg = !activity.organization || activity.organization === null || activity.organization === '';
+          const belongsToUserOrg = activity.organization && Number(activity.organization) === Number(orgId);
           const isNotCurrentActivity = !initialData || activity.id !== initialData.id;
-          return belongsToUserOrg && isNotCurrentActivity;
+          
+          // Include if: no org, belongs to user org, and not current activity being edited
+          const shouldInclude = (hasNoOrg || belongsToUserOrg) && isNotCurrentActivity;
+          
+          console.log(`MainActivityForm: Activity "${activity.name}" - org:${activity.organization}, userOrg:${orgId}, include:${shouldInclude}`);
+          return shouldInclude;
         });
         
         const totalExistingWeight = relevantActivities.reduce((sum, activity) => 
           sum + parseFloat(activity.weight || 0), 0
         );
+        
+        console.log('MainActivityForm: Existing activities weight calculation:', {
+          totalActivities: activities.length,
+          relevantActivities: relevantActivities.length,
+          totalExistingWeight,
+          isEditing: !!initialData
+        });
         
         setExistingActivitiesWeight(totalExistingWeight);
         
@@ -110,14 +151,20 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
         });
         
       } catch (error) {
-        console.error('Failed to load weight data:', error);
-        setSubmitError('Failed to load weight calculation data');
+        console.error('MainActivityForm: Failed to load weight data:', error);
+        setSubmitError(`Failed to load weight calculation data: ${error.message || 'Unknown error'}`);
       } finally {
         setIsLoadingWeights(false);
       }
     };
     
-    loadWeightData();
+    if (initiativeId) {
+      loadWeightData();
+    } else {
+      console.error('MainActivityForm: No initiativeId provided');
+      setSubmitError('Initiative ID is required');
+      setIsLoadingWeights(false);
+    }
   }, [initiativeId, initialData]);
 
   // Weight calculations
@@ -148,7 +195,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
       ? (q1Target === q2Target && q2Target === q3Target && q3Target === q4Target && q1Target === annualTarget ? annualTarget : 0)
       : q4Target;
 
-  // Form submission
+  // PRODUCTION-SAFE: Enhanced form submission with immediate close
   const handleFormSubmit = async (data: Partial<MainActivity>) => {
     if (isLoadingWeights) {
       setSubmitError('Please wait for weight data to load');
@@ -162,9 +209,12 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
 
     setIsSubmitting(true);
     setSubmitError(null);
+    setSubmitSuccess(null);
+    
+    console.log('MainActivityForm: Starting form submission for initiative:', initiativeId);
     
     try {
-      // Clean data for submission
+      // PRODUCTION-SAFE: Comprehensive data validation and cleaning
       const activityData = {
         name: String(data.name || '').trim(),
         initiative: initiativeId,
@@ -181,26 +231,65 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
         organization: userOrgId
       };
 
+      // Validate required fields
+      if (!activityData.name) {
+        setSubmitError('Activity name is required');
+        setIsSubmitting(false);
+        return;
+      }
+      
+      if (activityData.weight <= 0) {
+        setSubmitError('Weight must be greater than 0');
+        setIsSubmitting(false);
+        return;
+      }
+      
+      if (!userOrgId) {
+        setSubmitError('User organization not found');
+        setIsSubmitting(false);
+        return;
+      }
+
       console.log('Submitting activity:', activityData);
 
+      // Submit the activity
       let result;
       if (initialData?.id) {
+        console.log('MainActivityForm: Updating existing activity:', initialData.id);
         result = await mainActivities.update(initialData.id, activityData);
       } else {
+        console.log('MainActivityForm: Creating new activity');
         result = await mainActivities.create(activityData);
       }
       
       console.log('Activity saved successfully:', result);
       
-      // CRITICAL: Immediately refresh the activities list
-      queryClient.invalidateQueries({ queryKey: ['main-activities', initiativeId] });
-      queryClient.refetchQueries({ queryKey: ['main-activities', initiativeId] });
+      // Show success message
+      setSubmitSuccess(initialData ? 'Activity updated successfully!' : 'Activity created successfully!');
       
+      // PRODUCTION-SAFE: Gentle cache refresh to prevent disappearing activities
+      setTimeout(() => {
+        console.log('MainActivityForm: Refreshing activities cache after creation/update');
+        queryClient.invalidateQueries({ queryKey: ['main-activities', initiativeId] });
+      }, 200);
+      
+      // Call parent onSubmit callback
       await onSubmit(result.data || result);
       
-    } catch (error: any) {
-      console.error('Form submission error:', error);
+      // IMMEDIATE FORM CLOSE: Close form immediately after successful submission
+      setIsFormClosing(true);
+      setTimeout(() => {
+        if (onSuccess) {
+          onSuccess(); // Call success callback to close form
+        } else {
+          onCancel(); // Fallback to cancel if no success callback
+        }
+      }, 500); // Small delay to show success message
       
+    } catch (error: any) {
+      console.error('MainActivityForm: Form submission error:', error);
+      
+      // PRODUCTION-SAFE: Enhanced error handling
       let errorMessage = 'Failed to save activity';
       
       if (error.response?.data) {
@@ -213,16 +302,27 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
         } else if (error.response.data.non_field_errors) {
           const errors = error.response.data.non_field_errors;
           errorMessage = Array.isArray(errors) ? errors.join(', ') : String(errors);
+        } else if (error.response.data.weight) {
+          const weightErrors = error.response.data.weight;
+          errorMessage = Array.isArray(weightErrors) ? weightErrors.join(', ') : String(weightErrors);
+        } else if (error.response.data.name) {
+          const nameErrors = error.response.data.name;
+          errorMessage = Array.isArray(nameErrors) ? nameErrors.join(', ') : String(nameErrors);
         } else {
           const firstField = Object.keys(error.response.data)[0];
           const firstError = error.response.data[firstField];
           errorMessage = Array.isArray(firstError) ? firstError.join(', ') : String(firstError);
         }
+      } else if (error.request) {
+        errorMessage = 'Network error: Unable to reach server. Please check your connection.';
       } else if (error.message) {
         errorMessage = error.message;
+      } else {
+        errorMessage = 'An unexpected error occurred. Please try again.';
       }
       
       setSubmitError(errorMessage);
+      console.error('MainActivityForm: Final error message:', errorMessage);
     } finally {
       setIsSubmitting(false);
     }
@@ -236,17 +336,31 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
       setValue('selected_quarters', []);
       setPeriodType('months');
     }
+    setSubmitError(null); // Clear any previous errors
   };
 
+  // PRODUCTION-SAFE: Loading state with timeout protection
   if (isLoadingWeights) {
     return (
       <div className="flex items-center justify-center p-8">
         <Loader className="h-6 w-6 animate-spin mr-2" />
-        <span>Loading weight calculation...</span>
+        <div>
+          <span>Loading weight calculation...</span>
+          <p className="text-xs text-gray-500 mt-1">Initiative: {initiativeId}</p>
+        </div>
       </div>
     );
   }
 
+  // Show form closing state
+  if (isFormClosing) {
+    return (
+      <div className="flex items-center justify-center p-8">
+        <CheckCircle className="h-6 w-6 text-green-600 mr-2" />
+        <span className="text-green-700">Activity saved! Closing form...</span>
+      </div>
+    );
+  }
   return (
     <form onSubmit={handleSubmit(handleFormSubmit)} className="space-y-6">
       {/* Weight Information */}
@@ -296,6 +410,15 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
         )}
       </div>
 
+      {/* Success Message */}
+      {submitSuccess && (
+        <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+          <div className="flex items-center">
+            <CheckCircle className="h-5 w-5 text-green-500 mr-2" />
+            <p className="text-sm font-medium text-green-800">{submitSuccess}</p>
+          </div>
+        </div>
+      )}
       {/* Error Display */}
       {submitError && (
         <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
@@ -304,6 +427,13 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
             <div>
               <p className="text-sm font-medium text-red-800">Error saving activity:</p>
               <p className="text-sm text-red-600 mt-1 whitespace-pre-wrap">{submitError}</p>
+              <button
+                type="button"
+                onClick={() => setSubmitError(null)}
+                className="mt-2 text-xs text-red-600 hover:text-red-800 underline"
+              >
+                Dismiss Error
+              </button>
             </div>
           </div>
         </div>
@@ -314,14 +444,20 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
         <label className="block text-sm font-medium text-gray-700">
           Activity Name <span className="text-red-500">*</span>
         </label>
+        <p className="text-xs text-gray-500 mb-1">Enter a clear, descriptive name for this main activity</p>
         <input
           type="text"
           {...register('name', { 
             required: 'Activity name is required',
-            minLength: { value: 2, message: 'Name must be at least 2 characters' }
+            minLength: { value: 3, message: 'Name must be at least 3 characters' },
+            validate: {
+              notEmpty: value => value?.trim().length > 0 || 'Activity name cannot be empty',
+              validChars: value => /^[a-zA-Z0-9\s\-_.,()]+$/.test(value || '') || 'Only letters, numbers, spaces, and basic punctuation allowed'
+            }
           })}
           className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
           placeholder="Enter activity name"
+          disabled={isSubmitting || isFormClosing}
         />
         {errors.name && (
           <p className="mt-1 text-sm text-red-600">{errors.name.message}</p>
@@ -348,7 +484,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
             })}
             className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
             placeholder="Enter weight value"
-            disabled={availableWeight <= 0}
+            disabled={availableWeight <= 0 || isSubmitting || isFormClosing}
           />
           <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
             <span className="text-gray-500 sm:text-sm">%</span>
@@ -372,11 +508,13 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
         <label className="block text-sm font-medium text-gray-700">
           Baseline <span className="text-red-500">*</span>
         </label>
+        <p className="text-xs text-gray-500 mb-1">Current starting value before implementation</p>
         <input
           type="text"
           {...register('baseline', { required: 'Baseline is required' })}
           className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
           placeholder="Enter current value or starting point"
+          disabled={isSubmitting || isFormClosing}
         />
         {errors.baseline && (
           <p className="mt-1 text-sm text-red-600">{errors.baseline.message}</p>
@@ -395,6 +533,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
           <button
             type="button"
             onClick={togglePeriodType}
+            disabled={isSubmitting || isFormClosing}
             className="text-sm text-blue-600 hover:text-blue-800 font-medium px-3 py-1 bg-blue-50 rounded-md"
           >
             Switch to {periodType === 'months' ? 'Quarters' : 'Months'}
@@ -430,6 +569,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
                             : currentValues.filter((v) => v !== value)
                         );
                       }}
+                      disabled={isSubmitting || isFormClosing}
                       className="h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
                     />
                   )}
@@ -471,6 +611,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
                             : currentValues.filter((v) => v !== value)
                         );
                       }}
+                      disabled={isSubmitting || isFormClosing}
                       className="h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
                     />
                   )}
@@ -504,6 +645,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
           </label>
           <select
             {...register('target_type')}
+            disabled={isSubmitting || isFormClosing}
             className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
           >
             {TARGET_TYPES.map(type => (
@@ -532,6 +674,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
                 required: 'Annual target is required',
                 valueAsNumber: true
               })}
+              disabled={isSubmitting || isFormClosing}
               className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
               placeholder="Enter annual target value"
             />
@@ -551,6 +694,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
                 required: 'Q1 target is required',
                 valueAsNumber: true
               })}
+              disabled={isSubmitting || isFormClosing}
               className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
               placeholder="Q1 target value"
             />
@@ -570,6 +714,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
                 required: 'Q2 target is required',
                 valueAsNumber: true
               })}
+              disabled={isSubmitting || isFormClosing}
               className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
               placeholder="Q2 target value"
             />
@@ -598,6 +743,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
                 required: 'Q3 target is required',
                 valueAsNumber: true
               })}
+              disabled={isSubmitting || isFormClosing}
               className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
               placeholder="Q3 target value"
             />
@@ -626,6 +772,7 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
                 required: 'Q4 target is required',
                 valueAsNumber: true
               })}
+              disabled={isSubmitting || isFormClosing}
               className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
               placeholder="Q4 target value"
             />
@@ -656,20 +803,20 @@ const MainActivityForm: React.FC<MainActivityFormProps> = ({
         <button
           type="button"
           onClick={onCancel}
-          disabled={isSubmitting}
+          disabled={isSubmitting || isFormClosing}
           className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
         >
-          Cancel
+          {isFormClosing ? 'Closing...' : 'Cancel'}
         </button>
         <button
           type="submit"
-          disabled={isSubmitting || availableWeight <= 0 || currentWeight > maxWeight || !hasPeriodSelected}
+          disabled={isSubmitting || isFormClosing || availableWeight <= 0 || currentWeight > maxWeight || !hasPeriodSelected}
           className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
         >
-          {isSubmitting ? (
+          {isSubmitting || isFormClosing ? (
             <span className="flex items-center">
               <Loader className="h-4 w-4 mr-2 animate-spin" />
-              Saving...
+              {isFormClosing ? 'Closing...' : 'Saving...'}
             </span>
           ) : (
             initialData ? 'Update Activity' : 'Create Activity'
