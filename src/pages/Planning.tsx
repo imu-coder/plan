@@ -895,8 +895,6 @@ const Planning: React.FC = () => {
       setIsLoadingReviewData(false);
     }
   };
-    setCurrentStep('review');
-  };
 
   const handleSubmitPlan = async () => {
     try {
@@ -1082,6 +1080,35 @@ const Planning: React.FC = () => {
     }
   };
 
+  // Production-safe refresh function for user actions
+  const handleUserAction = React.useCallback((actionType: string) => {
+    console.log(`Planning.tsx: User action ${actionType}, triggering refresh`);
+    debouncedRefresh();
+  }, [debouncedRefresh]);
+
+  // Add refresh data handler for PlanReviewTable
+  const handleReviewDataRefresh = (freshData: StrategicObjective[]) => {
+    console.log('Planning.tsx: Received fresh data from PlanReviewTable:', freshData.length);
+    if (freshData && freshData.length > 0) {
+      // Update selected objectives with fresh data while preserving weights
+      const updatedObjectives = freshData.map(freshObj => {
+        const existingObj = selectedObjectives.find(obj => obj.id === freshObj.id);
+        if (existingObj) {
+          // Preserve the custom weights from planning
+          return {
+            ...freshObj,
+            effective_weight: existingObj.effective_weight,
+            planner_weight: existingObj.planner_weight
+          };
+        }
+        return freshObj;
+      });
+      setSelectedObjectives(updatedObjectives);
+    }
+  };
+
+  // Main render
+  return (
   // Main render
   return (
     <div className="px-4 py-6 sm:px-0">
@@ -1144,32 +1171,6 @@ const Planning: React.FC = () => {
           <PlanTypeSelector onSelectPlanType={handlePlanTypeSelect} />
         )}
 
-  // Production-safe refresh function for user actions
-  const handleUserAction = React.useCallback((actionType: string) => {
-    console.log(`Planning.tsx: User action ${actionType}, triggering refresh`);
-    debouncedRefresh();
-  }, [debouncedRefresh]);
-
-  // Add refresh data handler for PlanReviewTable
-  const handleReviewDataRefresh = (freshData: StrategicObjective[]) => {
-    console.log('Planning.tsx: Received fresh data from PlanReviewTable:', freshData.length);
-    if (freshData && freshData.length > 0) {
-      // Update selected objectives with fresh data while preserving weights
-      const updatedObjectives = freshData.map(freshObj => {
-        const existingObj = selectedObjectives.find(obj => obj.id === freshObj.id);
-        if (existingObj) {
-          // Preserve the custom weights from planning
-          return {
-            ...freshObj,
-            effective_weight: existingObj.effective_weight,
-            planner_weight: existingObj.planner_weight
-          };
-        }
-        return freshObj;
-      });
-      setSelectedObjectives(updatedObjectives);
-    }
-  };
         {/* Step 2: Objective Selection */}
         {currentStep === 'objective-selection' && (
           <div className="space-y-6">
@@ -1692,4 +1693,5 @@ const Planning: React.FC = () => {
     </div>
   );
 };
+
 export default Planning;
