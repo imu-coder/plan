@@ -1109,8 +1109,6 @@ const Planning: React.FC = () => {
 
   // Main render
   return (
-  // Main render
-  return (
     <div className="px-4 py-6 sm:px-0">
       {/* Error and Success Messages */}
       {error && (
