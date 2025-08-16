@@ -1,18 +1,18 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import {
-  Target,
-  Plus,
-  Edit,
-  Trash2,
-  Save,
-  Loader,
-  AlertCircle,
-  CheckCircle,
-  ArrowLeft,
-  ArrowRight,
-  Eye,
+import { 
+  Target, 
+  Plus, 
+  Edit, 
+  Trash2, 
+  Save, 
+  Loader, 
+  AlertCircle, 
+  CheckCircle, 
+  ArrowLeft, 
+  ArrowRight, 
+  Eye, 
   Send,
   Calculator,
   DollarSign,
@@ -29,32 +29,32 @@ import {
   XCircle
 } from 'lucide-react';
 import { useLanguage } from '../lib/i18n/LanguageContext';
-import {
-  organizations,
-  objectives,
-  programs,
-  initiatives,
-  performanceMeasures,
-  mainActivities,
-  plans,
+import { 
+  organizations, 
+  objectives, 
+  programs, 
+  initiatives, 
+  performanceMeasures, 
+  mainActivities, 
+  plans, 
   auth,
   activityBudgets,
   api
 } from '../lib/api';
-import type {
-  Organization,
-  StrategicObjective,
-  Program,
-  StrategicInitiative
+import type { 
+  Organization, 
+  StrategicObjective, 
+  Program, 
+  StrategicInitiative 
 } from '../types/organization';
-import type {
-  Plan,
-  PlanType,
-  MainActivity,
-  PerformanceMeasure,
-  ActivityBudget,
-  BudgetCalculationType,
-  ActivityType
+import type { 
+  Plan, 
+  PlanType, 
+  MainActivity, 
+  PerformanceMeasure, 
+  ActivityBudget, 
+  BudgetCalculationType, 
+  ActivityType 
 } from '../types/plan';
 import { isPlanner, isAdmin } from '../types/user';
 import { format } from 'date-fns';
@@ -85,11 +85,11 @@ import SupervisionCostingTool from '../components/SupervisionCostingTool';
 import PrintingCostingTool from '../components/PrintingCostingTool';
 import ProcurementCostingTool from '../components/ProcurementCostingTool';
 
-type PlanningStep =
-  | 'plan-type'
-  | 'objective-selection'
-  | 'planning'
-  | 'review'
+type PlanningStep = 
+  | 'plan-type' 
+  | 'objective-selection' 
+  | 'planning' 
+  | 'review' 
   | 'submit';
 
 // Success Modal Component
@@ -142,12 +142,12 @@ interface PlanStatusModalProps {
   message: string;
 }
 
-const PlanStatusModal: React.FC<PlanStatusModalProps> = ({
-  isOpen,
-  onClose,
-  onViewPlans,
-  planStatus,
-  message
+const PlanStatusModal: React.FC<PlanStatusModalProps> = ({ 
+  isOpen, 
+  onClose, 
+  onViewPlans, 
+  planStatus, 
+  message 
 }) => {
   if (!isOpen) return null;
 
@@ -205,7 +205,7 @@ const PlanStatusModal: React.FC<PlanStatusModalProps> = ({
             <button
               onClick={onViewPlans}
               className={`flex-1 px-4 py-2 rounded-md text-sm font-medium ${
-                planStatus === 'REJECTED'
+                planStatus === 'REJECTED' 
                   ? 'bg-blue-600 text-white hover:bg-blue-700'
                   : 'bg-green-600 text-white hover:bg-green-700'
               }`}
@@ -235,7 +235,7 @@ const PlansTable: React.FC<PlansTableProps> = ({ onCreateNewPlan, userOrgId }) =
       try {
         const response = await organizations.getAll();
         const orgMap: Record<string, string> = {};
-
+        
         if (response && Array.isArray(response)) {
           response.forEach((org: any) => {
             if (org && org.id) {
@@ -243,13 +243,13 @@ const PlansTable: React.FC<PlansTableProps> = ({ onCreateNewPlan, userOrgId }) =
             }
           });
         }
-
+        
         setOrganizationsMap(orgMap);
       } catch (error) {
         console.error('Failed to fetch organizations:', error);
       }
     };
-
+    
     fetchOrganizations();
   }, []);
 
@@ -258,21 +258,21 @@ const PlansTable: React.FC<PlansTableProps> = ({ onCreateNewPlan, userOrgId }) =
     queryKey: ['user-plans', userOrgId],
     queryFn: async () => {
       if (!userOrgId) return { data: [] };
-
+      
       try {
         const response = await api.get('/plans/', {
           params: { organization: userOrgId }
         });
-
+        
         const plansData = response.data?.results || response.data || [];
-
+        
         // Map organization names
         plansData.forEach((plan: any) => {
           if (plan.organization && organizationsMap[plan.organization]) {
             plan.organizationName = organizationsMap[plan.organization];
           }
         });
-
+        
         return { data: plansData };
       } catch (error) {
         console.error('Error fetching user plans:', error);
@@ -376,7 +376,7 @@ const PlansTable: React.FC<PlansTableProps> = ({ onCreateNewPlan, userOrgId }) =
                       {plan.type}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {plan.from_date && plan.to_date ?
+                      {plan.from_date && plan.to_date ? 
                         `${formatDate(plan.from_date)} - ${formatDate(plan.to_date)}` :
                         'N/A'}
                     </td>
@@ -420,17 +420,17 @@ const Planning: React.FC = () => {
   const [selectedObjective, setSelectedObjective] = useState<StrategicObjective | null>(null);
   const [selectedProgram, setSelectedProgram] = useState<Program | null>(null);
   const [selectedInitiative, setSelectedInitiative] = useState<StrategicInitiative | null>(null);
-
+  
   // User and organization state
   const [userOrganization, setUserOrganization] = useState<Organization | null>(null);
   const [plannerName, setPlannerName] = useState<string>('');
   const [isUserPlanner, setIsUserPlanner] = useState(false);
   const [userOrgId, setUserOrgId] = useState<number | null>(null);
-
+  
   // Planning period state
   const [fromDate, setFromDate] = useState<string>('');
   const [toDate, setToDate] = useState<string>('');
-
+  
   // Form and UI state
   const [showInitiativeForm, setShowInitiativeForm] = useState(false);
   const [showMeasureForm, setShowMeasureForm] = useState(false);
@@ -446,25 +446,25 @@ const Planning: React.FC = () => {
     message: string;
   }>({ status: null, message: '' });
   const [showPlansTable, setShowPlansTable] = useState(true);
-
+  
   // Edit state
   const [editingInitiative, setEditingInitiative] = useState<StrategicInitiative | null>(null);
   const [editingMeasure, setEditingMeasure] = useState<PerformanceMeasure | null>(null);
   const [editingActivity, setEditingActivity] = useState<MainActivity | null>(null);
   const [editingBudget, setEditingBudget] = useState<ActivityBudget | null>(null);
-
+  
   // Budget and costing state
   const [selectedActivity, setSelectedActivity] = useState<MainActivity | null>(null);
   const [budgetCalculationType, setBudgetCalculationType] = useState<BudgetCalculationType>('WITHOUT_TOOL');
   const [selectedActivityType, setSelectedActivityType] = useState<ActivityType | null>(null);
   const [costingToolData, setCostingToolData] = useState<any>(null);
-
+  
   // Error and loading state
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
-
+  
   // Production optimizations state
   const [isLoadingReviewData, setIsLoadingReviewData] = useState(false);
   const [reviewRefreshKey, setReviewRefreshKey] = useState(0);
@@ -485,19 +485,19 @@ const Planning: React.FC = () => {
   useEffect(() => {
     const checkExistingPlans = async () => {
       if (!userOrgId) return;
-
+      
       try {
         const response = await api.get('/plans/', {
           params: { organization: userOrgId }
         });
-
+        
         const plans = response.data?.results || response.data || [];
-
+        
         // Check for existing plans
         const submittedPlan = plans.find((p: any) => p.status === 'SUBMITTED');
         const approvedPlan = plans.find((p: any) => p.status === 'APPROVED');
         const rejectedPlan = plans.find((p: any) => p.status === 'REJECTED');
-
+        
         if (approvedPlan) {
           setPlanStatusInfo({
             status: 'APPROVED',
@@ -521,11 +521,11 @@ const Planning: React.FC = () => {
         setShowPlansTable(true);
       }
     };
-
+    
     checkExistingPlans();
   }, [userOrgId]);
 
-
+  
   // Fetch current user and organization
   useEffect(() => {
     const fetchUserData = async () => {
@@ -535,13 +535,13 @@ const Planning: React.FC = () => {
           navigate('/login');
           return;
         }
-
+        
         setIsUserPlanner(isPlanner(authData.userOrganizations));
-
+        
         if (authData.userOrganizations && authData.userOrganizations.length > 0) {
           const userOrg = authData.userOrganizations[0];
           setUserOrgId(userOrg.organization);
-
+          
           // Fetch organization details
           try {
             const orgData = await organizations.getById(userOrg.organization.toString());
@@ -550,26 +550,26 @@ const Planning: React.FC = () => {
             console.error('Failed to fetch organization details:', orgError);
           }
         }
-
+        
         // Set planner name
         const fullName = `${authData.user?.first_name || ''} ${authData.user?.last_name || ''}`.trim();
         setPlannerName(fullName || authData.user?.username || 'Unknown Planner');
-
+        
         // Set default dates (current fiscal year)
         const currentDate = new Date();
         const currentYear = currentDate.getFullYear();
         const fiscalYearStart = new Date(currentYear, 6, 1); // July 1st
         const fiscalYearEnd = new Date(currentYear + 1, 5, 30); // June 30th next year
-
+        
         setFromDate(fiscalYearStart.toISOString().split('T')[0]);
         setToDate(fiscalYearEnd.toISOString().split('T')[0]);
-
+        
       } catch (error) {
         console.error('Failed to fetch user data:', error);
         setError('Failed to load user information');
       }
     };
-
+    
     fetchUserData();
   }, [navigate]);
 
@@ -578,13 +578,13 @@ const Planning: React.FC = () => {
     try {
       setIsLoadingReviewData(true);
       setError(null);
-
+      
       // Increment refresh key to trigger fresh data fetch in PlanReviewTable
       setReviewRefreshKey(prev => prev + 1);
-
+      
       // Small delay to ensure data is fresh
       await new Promise(resolve => setTimeout(resolve, 100));
-
+      
       setCurrentStep('review');
     } catch (error) {
       console.error('Error preparing review data:', error);
@@ -608,27 +608,27 @@ const Planning: React.FC = () => {
     updateType: string
   ) => {
     const updateId = `${updateType}-${Date.now()}`;
-
+    
     try {
       // Add optimistic update
       setOptimisticUpdates(prev => new Set(prev).add(updateId));
       setError(null);
-
+      
       // Show immediate success feedback
       setSuccess(successMessage);
-
+      
       // Perform the actual save
       await saveFunction();
-
+      
       // Trigger debounced refresh
       debouncedRefresh();
-
+      
       // Clear success message after delay
       setTimeout(() => setSuccess(null), 3000);
     } catch (error: any) {
       console.error(`Failed to save ${updateType}:`, error);
       setError(error.message || `Failed to save ${updateType}`);
-
+      
       // Clear the success message on error
       setSuccess(null);
     } finally {
@@ -658,14 +658,14 @@ const Planning: React.FC = () => {
   if (showPlansTable && currentStep === 'plan-type') {
     return (
       <div className="px-4 py-6 sm:px-0">
-        <PlansTable
+        <PlansTable 
           onCreateNewPlan={() => {
             setShowPlansTable(false);
             setCurrentStep('plan-type');
           }}
           userOrgId={userOrgId}
         />
-
+        
         {/* Status Modal */}
         <PlanStatusModal
           isOpen={showStatusModal}
@@ -690,7 +690,7 @@ const Planning: React.FC = () => {
   const handleObjectivesSelected = (objectives: StrategicObjective[]) => {
     console.log('Objectives selected in Planning:', objectives);
     setSelectedObjectives(objectives);
-
+    
     // If only one objective, auto-select it
     if (objectives.length === 1) {
       setSelectedObjective(objectives[0]);
@@ -731,10 +731,10 @@ const Planning: React.FC = () => {
         selectedObjectives.find(obj => obj.id === selectedObjective.id)?.planner_weight ||
         selectedObjective.weight
       ) : selectedProgram?.strategic_objective?.weight || 100,
-      selectedObjectiveData: selectedObjective ?
+      selectedObjectiveData: selectedObjective ? 
         selectedObjectives.find(obj => obj.id === selectedObjective.id) : null
     };
-
+    
     setEditingInitiative(initiative as StrategicInitiative);
     setShowInitiativeForm(true);
   };
@@ -749,57 +749,6 @@ const Planning: React.FC = () => {
       setShowInitiativeForm(false);
       setEditingInitiative(null);
     }, 'Initiative saved successfully', 'initiative');
-  };
-
-  const handleUpdateInitiative = async (data: any) => {
-    try {
-      setError(null);
-      console.log('Planning: Starting initiative update with data:', data);
-
-      let result;
-      if (editingInitiative?.id) {
-        console.log('Planning: Updating existing initiative:', editingInitiative.id);
-
-        // CRITICAL: Preserve all existing data for updates
-        const updateData = {
-          ...editingInitiative, // Start with existing data
-          ...data, // Apply new changes
-          id: editingInitiative.id,
-          organization: editingInitiative.organization || data.organization,
-          is_default: editingInitiative.is_default,
-          created_at: editingInitiative.created_at,
-          updated_at: editingInitiative.updated_at
-        };
-
-        console.log('Planning: Update data prepared:', updateData);
-        result = await initiatives.update(editingInitiative.id, data);
-        console.log('Planning: Initiative update result:', result);
-      } else {
-        console.log('Planning: Creating new initiative');
-        result = await initiatives.create(data);
-        console.log('Planning: Initiative create result:', result);
-      }
-
-      setEditingInitiative(null);
-
-      // Force refresh initiatives with delay to ensure backend is updated
-      setTimeout(() => {
-        console.log('Planning: Triggering initiative refresh after update');
-        setInitiativeRefreshKey(prev => prev + 1);
-        queryClient.invalidateQueries({ queryKey: ['initiatives'] });
-        queryClient.invalidateQueries({ queryKey: ['objectives'] });
-      }, 500);
-
-      console.log('Planning: Initiative update process completed successfully');
-    } catch (error: any) {
-      console.error('Failed to save initiative:', error);
-      console.error('Initiative update error details:', {
-        message: error.message,
-        response: error.response?.data,
-        status: error.response?.status
-      });
-      setError(error.message || 'Failed to save initiative');
-    }
   };
 
   // Performance measure CRUD handlers
@@ -843,7 +792,7 @@ const Planning: React.FC = () => {
     setSelectedActivity(activity);
     setBudgetCalculationType(calculationType);
     setSelectedActivityType(activityType || null);
-
+    
     if (calculationType === 'WITH_TOOL' && activityType) {
       setShowCostingTool(true);
     } else {
@@ -854,7 +803,7 @@ const Planning: React.FC = () => {
   const handleEditBudget = (activity: MainActivity) => {
     setSelectedActivity(activity);
     setEditingBudget(activity.budget || null);
-
+    
     if (activity.budget?.budget_calculation_type === 'WITH_TOOL') {
       setBudgetCalculationType('WITH_TOOL');
       setSelectedActivityType(activity.budget.activity_type || null);
@@ -862,7 +811,7 @@ const Planning: React.FC = () => {
       setBudgetCalculationType('WITHOUT_TOOL');
       setSelectedActivityType(null);
     }
-
+    
     setShowBudgetForm(true);
   };
 
@@ -883,10 +832,10 @@ const Planning: React.FC = () => {
       if (!selectedActivity?.id) {
         throw new Error('No activity selected for budget');
       }
-
+      
       console.log('Saving budget for activity:', selectedActivity.id);
       await mainActivities.updateBudget(selectedActivity.id, budgetData);
-
+      
       setShowBudgetForm(false);
       setSelectedActivity(null);
       setEditingBudget(null);
@@ -909,21 +858,21 @@ const Planning: React.FC = () => {
     try {
       setIsSubmitting(true);
       setError(null);
-
+      
       if (!userOrganization || selectedObjectives.length === 0) {
         throw new Error('Missing required plan data');
       }
-
+      
       // Check for existing plans before submitting
       try {
         const existingPlansResponse = await api.get('/plans/', {
           params: { organization: userOrgId }
         });
-
+        
         const existingPlans = existingPlansResponse.data?.results || existingPlansResponse.data || [];
         const submittedPlan = existingPlans.find((p: any) => p.status === 'SUBMITTED');
         const approvedPlan = existingPlans.find((p: any) => p.status === 'APPROVED');
-
+        
         if (approvedPlan) {
           setPlanStatusInfo({
             status: 'APPROVED',
@@ -932,7 +881,7 @@ const Planning: React.FC = () => {
           setShowStatusModal(true);
           return;
         }
-
+        
         if (submittedPlan) {
           setPlanStatusInfo({
             status: 'SUBMITTED',
@@ -945,20 +894,20 @@ const Planning: React.FC = () => {
         console.warn('Failed to check existing plans:', checkError);
         // Continue with submission if check fails
       }
-
+      
       const selectedObjectiveIds = selectedObjectives.map(obj => obj.id);
-
+      
       // Prepare selected objectives weights
       const selectedObjectivesWeights: Record<string, number> = {};
       selectedObjectives.forEach(obj => {
-        const effectiveWeight = obj.effective_weight !== undefined
+        const effectiveWeight = obj.effective_weight !== undefined 
           ? obj.effective_weight
           : obj.planner_weight !== undefined && obj.planner_weight !== null
             ? obj.planner_weight
             : obj.weight;
         selectedObjectivesWeights[obj.id.toString()] = effectiveWeight;
       });
-
+      
       // Create plan data
       const planData = {
         organization: userOrganization.id,
@@ -972,23 +921,23 @@ const Planning: React.FC = () => {
         to_date: toDate,
         status: 'SUBMITTED'
       };
-
+      
       console.log('Submitting plan:', planData);
       console.log('Selected objective IDs:', selectedObjectiveIds);
       console.log('Selected objectives weights:', selectedObjectivesWeights);
-
+      
       // Create the plan
       const createdPlan = await plans.create(planData);
       console.log('Plan created:', createdPlan);
-
+      
       // Show success modal
       setShowSuccessModal(true);
-
+      
     } catch (error: any) {
       console.error('Failed to submit plan:', error);
-
+      
       // Check if it's a duplicate plan error
-      if (error.response?.data?.detail?.includes('already been submitted') ||
+      if (error.response?.data?.detail?.includes('already been submitted') || 
           error.response?.data?.detail?.includes('duplicate')) {
         setPlanStatusInfo({
           status: 'SUBMITTED',
@@ -1131,9 +1080,9 @@ const Planning: React.FC = () => {
               <li key={step.key} className={`${index !== 3 ? 'pr-8 sm:pr-20' : ''} relative`}>
                 <div className="flex items-center">
                   <div className={`flex h-8 w-8 items-center justify-center rounded-full border-2 ${
-                    currentStep === step.key
-                      ? 'border-green-600 bg-green-600 text-white'
-                      : ['plan-type', 'objective-selection'].includes(step.key) &&
+                    currentStep === step.key 
+                      ? 'border-green-600 bg-green-600 text-white' 
+                      : ['plan-type', 'objective-selection'].includes(step.key) && 
                         ['objective-selection', 'planning', 'review'].includes(currentStep)
                         ? 'border-green-600 bg-green-600 text-white'
                         : 'border-gray-300 bg-white text-gray-500'
@@ -1219,7 +1168,7 @@ const Planning: React.FC = () => {
                 <ArrowLeft className="h-5 w-5 mr-1" />
                 Back to Objectives
               </button>
-
+              
               <div className="flex space-x-3">
                 <button
                   onClick={handleReviewPlan}
@@ -1282,33 +1231,33 @@ const Planning: React.FC = () => {
                     // Calculate the effective weight to pass to InitiativeList
                     let effectiveWeight = 100; // Default fallback
                     let selectedObjectiveData = null;
-
+                    
                     if (selectedObjective) {
                       // Find the selected objective in the selectedObjectives array to get the custom weight
                       selectedObjectiveData = selectedObjectives.find(obj => obj.id === selectedObjective.id);
-
+                      
                       console.log('Planning.tsx: Found selectedObjectiveData:', selectedObjectiveData);
-
+                      
                       if (selectedObjectiveData) {
                         // Use the weight from selectedObjectives array (which has custom weights)
-                        effectiveWeight = selectedObjectiveData.effective_weight !== undefined
+                        effectiveWeight = selectedObjectiveData.effective_weight !== undefined 
                           ? selectedObjectiveData.effective_weight
                           : selectedObjectiveData.planner_weight !== undefined && selectedObjectiveData.planner_weight !== null
                             ? selectedObjectiveData.planner_weight
                             : selectedObjectiveData.weight;
-
+                        
                         console.log('Planning.tsx: Using custom weight from selectedObjectives:', effectiveWeight);
                       } else {
                         // Fallback to the selected objective's weight
-                        effectiveWeight = selectedObjective.effective_weight !== undefined
+                        effectiveWeight = selectedObjective.effective_weight !== undefined 
                           ? selectedObjective.effective_weight
                           : selectedObjective.planner_weight !== undefined && selectedObjective.planner_weight !== null
                             ? selectedObjective.planner_weight
                             : selectedObjective.weight;
-
+                        
                         console.log('Planning.tsx: Using fallback weight from selectedObjective:', effectiveWeight);
                       }
-
+                      
                       console.log('Planning.tsx - Weight calculation for InitiativeList:', {
                         objectiveId: selectedObjective.id,
                         objectiveTitle: selectedObjective.title,
@@ -1320,13 +1269,13 @@ const Planning: React.FC = () => {
                       });
                     } else if (selectedProgram) {
                       // For programs, also check if the parent objective is in selectedObjectives
-                      const parentObjective = selectedObjectives.find(obj =>
-                        obj.id === selectedProgram.strategic_objective_id ||
+                      const parentObjective = selectedObjectives.find(obj => 
+                        obj.id === selectedProgram.strategic_objective_id || 
                         obj.id === selectedProgram.strategic_objective?.id
                       );
-
+                      
                       if (parentObjective) {
-                        effectiveWeight = parentObjective.effective_weight !== undefined
+                        effectiveWeight = parentObjective.effective_weight !== undefined 
                           ? parentObjective.effective_weight
                           : parentObjective.planner_weight !== undefined && parentObjective.planner_weight !== null
                             ? parentObjective.planner_weight
@@ -1337,7 +1286,7 @@ const Planning: React.FC = () => {
                                         selectedProgram.strategic_objective?.weight || 100;
                       }
                     }
-
+                    
                     return (
                       <InitiativeList
                         parentId={(selectedObjective?.id || selectedProgram?.id)?.toString() || ''}
@@ -1401,11 +1350,11 @@ const Planning: React.FC = () => {
                         planKey={`planning-${refreshKey}`}
                         refreshKey={refreshKey}
                       />
-
+                      
                       {/* Create Main Activity Button */}
                       {isUserPlanner && (
                         <div className="text-center pt-4">
-                          <button
+                          <button 
                             onClick={() => handleEditActivity({})}
                             className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-orange-600 hover:bg-orange-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-orange-500"
                           >
@@ -1477,7 +1426,7 @@ const Planning: React.FC = () => {
       </div>
 
       {/* Modals and Forms */}
-
+      
       {/* Initiative Form Modal */}
       {showInitiativeForm && (selectedObjective || selectedProgram) && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
@@ -1485,37 +1434,37 @@ const Planning: React.FC = () => {
             <h3 className="text-lg font-medium text-gray-900 mb-4">
               {editingInitiative?.id ? 'Edit Initiative' : 'Create Initiative'}
             </h3>
-
+            
             {(() => {
               // Calculate the effective weight for the form
               let formParentWeight = 100;
               let selectedObjectiveData = null;
-
+              
               if (selectedObjective) {
                 // Find the selected objective in the selectedObjectives array
                 selectedObjectiveData = selectedObjectives.find(obj => obj.id === selectedObjective.id);
-
+                
                 if (selectedObjectiveData) {
-                  formParentWeight = selectedObjectiveData.effective_weight !== undefined
+                  formParentWeight = selectedObjectiveData.effective_weight !== undefined 
                     ? selectedObjectiveData.effective_weight
                     : selectedObjectiveData.planner_weight !== undefined && selectedObjectiveData.planner_weight !== null
                       ? selectedObjectiveData.planner_weight
                       : selectedObjectiveData.weight;
                 } else {
-                  formParentWeight = selectedObjective.effective_weight !== undefined
+                  formParentWeight = selectedObjective.effective_weight !== undefined 
                     ? selectedObjective.effective_weight
                     : selectedObjective.planner_weight !== undefined && selectedObjective.planner_weight !== null
                       ? selectedObjective.planner_weight
                       : selectedObjective.weight;
                 }
               } else if (selectedProgram) {
-                const parentObjective = selectedObjectives.find(obj =>
-                  obj.id === selectedProgram.strategic_objective_id ||
+                const parentObjective = selectedObjectives.find(obj => 
+                  obj.id === selectedProgram.strategic_objective_id || 
                   obj.id === selectedProgram.strategic_objective?.id
                 );
-
+                
                 if (parentObjective) {
-                  formParentWeight = parentObjective.effective_weight !== undefined
+                  formParentWeight = parentObjective.effective_weight !== undefined 
                     ? parentObjective.effective_weight
                     : parentObjective.planner_weight !== undefined && parentObjective.planner_weight !== null
                       ? parentObjective.planner_weight
@@ -1524,7 +1473,7 @@ const Planning: React.FC = () => {
                   formParentWeight = selectedProgram.strategic_objective?.weight || 100;
                 }
               }
-
+              
               console.log('InitiativeForm Modal - Weight calculation:', {
                 selectedObjective: selectedObjective?.title,
                 selectedProgram: selectedProgram?.name,
@@ -1532,7 +1481,7 @@ const Planning: React.FC = () => {
                 formParentWeight,
                 originalWeight: selectedObjective?.weight || selectedProgram?.strategic_objective?.weight
               });
-
+              
               return (
                 <InitiativeForm
                   parentId={(selectedObjective?.id || selectedProgram?.id)?.toString() || ''}
@@ -1557,7 +1506,7 @@ const Planning: React.FC = () => {
             <h3 className="text-lg font-medium text-gray-900 mb-4">
               {editingMeasure?.id ? 'Edit Performance Measure' : 'Create Performance Measure'}
             </h3>
-
+            
             <PerformanceMeasureForm
               initiativeId={selectedInitiative.id}
               currentTotal={0}
@@ -1576,7 +1525,7 @@ const Planning: React.FC = () => {
             <h3 className="text-lg font-medium text-gray-900 mb-4">
               {editingActivity?.id ? 'Edit Main Activity' : 'Create Main Activity'}
             </h3>
-
+            
             <MainActivityForm
               initiativeId={selectedInitiative.id}
               currentTotal={0}
@@ -1613,7 +1562,7 @@ const Planning: React.FC = () => {
             <h3 className="text-lg font-medium text-gray-900 mb-4">
               {editingBudget ? 'Edit Budget' : 'Add Budget'} - {selectedActivity.name}
             </h3>
-
+            
             <ActivityBudgetForm
               activity={selectedActivity}
               budgetCalculationType={budgetCalculationType}

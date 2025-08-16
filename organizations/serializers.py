@@ -95,67 +95,89 @@ class StrategicInitiativeSerializer(serializers.ModelSerializer):
         ]
 
     def get_performance_measures(self, obj):
-        # Filter performance measures by request user's organization
+        """Filter performance measures by request user's organization"""
         measures = obj.performance_measures.all()
         request = self.context.get('request')
-        if request and request.user.is_authenticated:
-            user_org = getattr(request.user, 'organization_users', None)
-            if user_org and hasattr(user_org, 'first'):
-                user_org_instance = user_org.first()
-                if user_org_instance:
-                    user_org_id = user_org_instance.organization_id
+        
+        if request and hasattr(request, 'user') and request.user.is_authenticated:
+            try:
+                # Get user's organization safely
+                user_orgs = request.user.organization_users.all()
+                if user_orgs.exists():
+                    user_org_id = user_orgs.first().organization_id
+                    # Filter to show only measures with no org or user's org
                     measures = measures.filter(
                         models.Q(organization__isnull=True) | 
                         models.Q(organization=user_org_id)
                     )
+                    print(f"StrategicInitiativeSerializer: Filtered performance measures for org {user_org_id}")
+                else:
+                    print("StrategicInitiativeSerializer: User has no organizations")
+            except Exception as e:
+                print(f"StrategicInitiativeSerializer: Error filtering performance measures: {e}")
+        
         return PerformanceMeasureSerializer(measures, many=True).data
 
     def get_main_activities(self, obj):
-        # Filter main activities by request user's organization  
+        """Filter main activities by request user's organization"""
         activities = obj.main_activities.all()
         request = self.context.get('request')
-        if request and request.user.is_authenticated:
-            user_org = getattr(request.user, 'organization_users', None)
-            if user_org and hasattr(user_org, 'first'):
-                user_org_instance = user_org.first()
-                if user_org_instance:
-                    user_org_id = user_org_instance.organization_id
+        
+        if request and hasattr(request, 'user') and request.user.is_authenticated:
+            try:
+                # Get user's organization safely
+                user_orgs = request.user.organization_users.all()
+                if user_orgs.exists():
+                    user_org_id = user_orgs.first().organization_id
+                    # Filter to show only activities with no org or user's org
                     activities = activities.filter(
                         models.Q(organization__isnull=True) | 
                         models.Q(organization=user_org_id)
                     )
+                    print(f"StrategicInitiativeSerializer: Filtered main activities for org {user_org_id}")
+                else:
+                    print("StrategicInitiativeSerializer: User has no organizations")
+            except Exception as e:
+                print(f"StrategicInitiativeSerializer: Error filtering main activities: {e}")
+        
         return MainActivitySerializer(activities, many=True, context=self.context).data
 
     def get_total_measures_weight(self, obj):
-        # Calculate weight only for user's organization measures
+        """Calculate weight only for user's organization measures"""
         measures = obj.performance_measures.all()
         request = self.context.get('request')
-        if request and request.user.is_authenticated:
-            user_org = getattr(request.user, 'organization_users', None)
-            if user_org and hasattr(user_org, 'first'):
-                user_org_instance = user_org.first()
-                if user_org_instance:
-                    user_org_id = user_org_instance.organization_id
+        
+        if request and hasattr(request, 'user') and request.user.is_authenticated:
+            try:
+                user_orgs = request.user.organization_users.all()
+                if user_orgs.exists():
+                    user_org_id = user_orgs.first().organization_id
                     measures = measures.filter(
                         models.Q(organization__isnull=True) | 
                         models.Q(organization=user_org_id)
                     )
+            except Exception as e:
+                print(f"StrategicInitiativeSerializer: Error calculating measures weight: {e}")
+        
         return sum(measure.weight for measure in measures)
 
     def get_total_activities_weight(self, obj):
-        # Calculate weight only for user's organization activities
+        """Calculate weight only for user's organization activities"""
         activities = obj.main_activities.all()
         request = self.context.get('request')
-        if request and request.user.is_authenticated:
-            user_org = getattr(request.user, 'organization_users', None)
-            if user_org and hasattr(user_org, 'first'):
-                user_org_instance = user_org.first()
-                if user_org_instance:
-                    user_org_id = user_org_instance.organization_id
+        
+        if request and hasattr(request, 'user') and request.user.is_authenticated:
+            try:
+                user_orgs = request.user.organization_users.all()
+                if user_orgs.exists():
+                    user_org_id = user_orgs.first().organization_id
                     activities = activities.filter(
                         models.Q(organization__isnull=True) | 
                         models.Q(organization=user_org_id)
                     )
+            except Exception as e:
+                print(f"StrategicInitiativeSerializer: Error calculating activities weight: {e}")
+        
         return sum(activity.weight for activity in activities)
 
 class PerformanceMeasureSerializer(serializers.ModelSerializer):

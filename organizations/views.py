@@ -8,6 +8,7 @@ from django.db.models import Sum, Q
 import json
 import traceback
 import logging
+from django.db import models
 from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -437,7 +438,13 @@ class ProgramViewSet(viewsets.ModelViewSet):
         # Filter by strategic objective if provided
         strategic_objective_id = self.request.query_params.get('strategic_objective')
         if strategic_objective_id:
-            queryset = queryset.filter(strategic_objective_id=strategic_objective_id)
+        # Filter by parent type
+        if objective:
+            base_queryset = queryset.filter(strategic_objective=objective)
+        elif program:
+            base_queryset = queryset.filter(program=program)
+        else:
+            base_queryset = queryset
         
         return queryset
 
@@ -445,6 +452,36 @@ class StrategicInitiativeViewSet(viewsets.ModelViewSet):
     queryset = StrategicInitiative.objects.all()
     serializer_class = StrategicInitiativeSerializer
     permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        """Filter initiatives to show only default + user's organization initiatives"""
+        base_queryset = StrategicInitiative.objects.all()
+        
+        # Get user's organization
+        user_org = None
+        if self.request.user.is_authenticated:
+            try:
+                user_org_relation = self.request.user.organization_users.first()
+                if user_org_relation:
+                    user_org = user_org_relation.organization_id
+                    print(f"StrategicInitiativeViewSet: User org ID: {user_org}")
+            except Exception as e:
+                print(f"StrategicInitiativeViewSet: Error getting user org: {e}")
+        
+        if user_org:
+            # Show default initiatives + user's organization initiatives + initiatives with no org
+            queryset = base_queryset.filter(
+                models.Q(is_default=True) |
+                models.Q(organization__isnull=True) |
+                models.Q(organization=user_org)
+            )
+            print(f"StrategicInitiativeViewSet: Filtered queryset count: {queryset.count()}")
+        else:
+            # If no user org, show only default initiatives
+            queryset = base_queryset.filter(is_default=True)
+            print("StrategicInitiativeViewSet: No user org, showing only defaults")
+        
+        return queryset.distinct()
     
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -934,6 +971,42 @@ class MainActivityViewSet(viewsets.ModelViewSet):
     queryset = MainActivity.objects.all()
     serializer_class = MainActivitySerializer
     permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        """Filter main activities to show only user's organization activities + legacy activities"""
+        base_queryset = MainActivity.objects.all()
+        
+        # Get user's organization
+        user_org = None
+        if self.request.user.is_authenticated:
+            try:
+                user_org_relation = self.request.user.organization_users.first()
+                if user_org_relation:
+                    user_org = user_org_relation.organization_id
+                    print(f"MainActivityViewSet: User org ID: {user_org}")
+            except Exception as e:
+                print(f"MainActivityViewSet: Error getting user org: {e}")
+        
+        if user_org:
+            # Show activities with no org (legacy) + user's organization activities
+            queryset = base_queryset.filter(
+                models.Q(organization__isnull=True) |
+                models.Q(organization=user_org)
+            )
+            
+            # Apply additional filters from query parameters
+            initiative = self.request.query_params.get('initiative')
+            if initiative:
+                queryset = queryset.filter(initiative=initiative)
+                print(f"MainActivityViewSet: Filtered by initiative {initiative}")
+            
+            print(f"MainActivityViewSet: Final queryset count: {queryset.count()}")
+        else:
+            # If no user org, show only legacy activities
+            queryset = base_queryset.filter(organization__isnull=True)
+            print("MainActivityViewSet: No user org, showing only legacy activities")
+        
+        return queryset.distinct()
     
     def get_queryset(self):
         queryset = super().get_queryset()
