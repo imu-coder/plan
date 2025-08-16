@@ -39,8 +39,7 @@ import {
   plans,
   auth,
   activityBudgets,
-  api,
-  subActivities
+  api
 } from '../lib/api';
 import type {
   Organization,
@@ -243,12 +242,6 @@ const PlansTable: React.FC<PlansTableProps> = ({ onCreateNewPlan, userOrgId }) =
               orgMap[org.id] = org.name;
             }
           });
-        } else if (response?.data && Array.isArray(response.data)) {
-          response.data.forEach((org: any) => {
-            if (org && org.id) {
-              orgMap[org.id] = org.name;
-            }
-          });
         }
 
         setOrganizationsMap(orgMap);
@@ -261,7 +254,7 @@ const PlansTable: React.FC<PlansTableProps> = ({ onCreateNewPlan, userOrgId }) =
   }, []);
 
   // Fetch user's plans
-  const { data: userPlans, isLoading } = useQuery({
+  const { data: userPlans, isLoading, refetch } = useQuery({
     queryKey: ['user-plans', userOrgId],
     queryFn: async () => {
       if (!userOrgId) return { data: [] };
@@ -420,7 +413,7 @@ const Planning: React.FC = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
-  // ALL HOOKS AT TOP LEVEL - Critical for React hooks rules
+  // Move all hooks to the top level to fix hooks order error
   const [currentStep, setCurrentStep] = useState<PlanningStep>('plan-type');
   const [selectedPlanType, setSelectedPlanType] = useState<PlanType>('LEO/EO Plan');
   const [selectedObjectives, setSelectedObjectives] = useState<StrategicObjective[]>([]);
@@ -471,20 +464,22 @@ const Planning: React.FC = () => {
   const [success, setSuccess] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
-  const [initiativeRefreshKey, setInitiativeRefreshKey] = useState(0);
 
   // Production optimizations state
   const [isLoadingReviewData, setIsLoadingReviewData] = useState(false);
   const [reviewRefreshKey, setReviewRefreshKey] = useState(0);
   const [optimisticUpdates, setOptimisticUpdates] = useState<Set<string>>(new Set());
 
-  // Debounced refresh function
-  const debouncedRefresh = useCallback(() => {
-    const timeoutId = setTimeout(() => {
-      setRefreshKey(prev => prev + 1);
-    }, 300);
-    return () => clearTimeout(timeoutId);
-  }, []);
+  // Move debounced refresh to top level to fix hooks order
+  const debouncedRefresh = React.useCallback(
+    React.useMemo(() => {
+      let timeoutId: NodeJS.Timeout;
+      return () => {
+        clearTimeout(timeoutId);
+        timeoutId = setTimeout(() => setRefreshKey(prev => prev + 1), 300);
+      };
+    }, []), []
+  );
 
   // Check for existing plans on component mount
   useEffect(() => {
@@ -501,6 +496,7 @@ const Planning: React.FC = () => {
         // Check for existing plans
         const submittedPlan = plans.find((p: any) => p.status === 'SUBMITTED');
         const approvedPlan = plans.find((p: any) => p.status === 'APPROVED');
+        const rejectedPlan = plans.find((p: any) => p.status === 'REJECTED');
 
         if (approvedPlan) {
           setPlanStatusInfo({
@@ -529,48 +525,35 @@ const Planning: React.FC = () => {
     checkExistingPlans();
   }, [userOrgId]);
 
+
   // Fetch current user and organization
   useEffect(() => {
     const fetchUserData = async () => {
       try {
-        console.log('Planning: Fetching user authentication data...');
         const authData = await auth.getCurrentUser();
-        
         if (!authData.isAuthenticated) {
-          console.log('Planning: User not authenticated, redirecting to login');
           navigate('/login');
           return;
         }
 
-        console.log('Planning: User authenticated successfully');
         setIsUserPlanner(isPlanner(authData.userOrganizations));
 
         if (authData.userOrganizations && authData.userOrganizations.length > 0) {
           const userOrg = authData.userOrganizations[0];
           setUserOrgId(userOrg.organization);
-          console.log('Planning: User organization ID set to:', userOrg.organization);
 
           // Fetch organization details
           try {
-            const orgResponse = await organizations.getAll();
-            const orgsData = orgResponse?.data || orgResponse || [];
-            const userOrgData = orgsData.find((org: any) => org.id === userOrg.organization);
-            
-            if (userOrgData) {
-              setUserOrganization(userOrgData);
-              console.log('Planning: Organization details loaded:', userOrgData.name);
-            } else {
-              console.warn('Planning: Organization not found in list');
-            }
+            const orgData = await organizations.getById(userOrg.organization.toString());
+            setUserOrganization(orgData);
           } catch (orgError) {
-            console.error('Planning: Failed to fetch organization details:', orgError);
+            console.error('Failed to fetch organization details:', orgError);
           }
         }
 
         // Set planner name
         const fullName = `${authData.user?.first_name || ''} ${authData.user?.last_name || ''}`.trim();
         setPlannerName(fullName || authData.user?.username || 'Unknown Planner');
-        console.log('Planning: Planner name set to:', fullName || authData.user?.username);
 
         // Set default dates (current fiscal year)
         const currentDate = new Date();
@@ -580,16 +563,43 @@ const Planning: React.FC = () => {
 
         setFromDate(fiscalYearStart.toISOString().split('T')[0]);
         setToDate(fiscalYearEnd.toISOString().split('T')[0]);
-        console.log('Planning: Default dates set');
 
       } catch (error) {
-        console.error('Planning: Failed to fetch user data:', error);
+        console.error('Failed to fetch user data:', error);
         setError('Failed to load user information');
       }
     };
 
     fetchUserData();
   }, [navigate]);
+
+  // Handle review with fresh data
+  const handleReviewPlan = async () => {
+    try {
+      setIsLoadingReviewData(true);
+      setError(null);
+
+      // Increment refresh key to trigger fresh data fetch in PlanReviewTable
+      setReviewRefreshKey(prev => prev + 1);
+
+      // Small delay to ensure data is fresh
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      setCurrentStep('review');
+    } catch (error) {
+      console.error('Error preparing review data:', error);
+      setError('Failed to prepare review data');
+    } finally {
+      setIsLoadingReviewData(false);
+    }
+  };
+
+  // Handle fresh data received from PlanReviewTable
+  const handleReviewDataRefresh = (freshData: StrategicObjective[]) => {
+    console.log('Fresh data received in Planning from PlanReviewTable:', freshData.length);
+    // Update selected objectives with fresh data while preserving custom weights
+    setSelectedObjectives(freshData);
+  };
 
   // Optimized save handlers with immediate feedback
   const handleSaveWithOptimisticUpdate = async (
@@ -631,155 +641,174 @@ const Planning: React.FC = () => {
     }
   };
 
+  // Check permissions
+  if (!isUserPlanner && !isAdmin) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <div className="text-center p-8 bg-yellow-50 rounded-lg border border-yellow-200">
+          <AlertCircle className="h-12 w-12 text-yellow-500 mx-auto mb-4" />
+          <h3 className="text-lg font-medium text-yellow-800 mb-2">Access Restricted</h3>
+          <p className="text-yellow-600">{t('planning.permissions.plannerRequired')}</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show plans table first
+  if (showPlansTable && currentStep === 'plan-type') {
+    return (
+      <div className="px-4 py-6 sm:px-0">
+        <PlansTable
+          onCreateNewPlan={() => {
+            setShowPlansTable(false);
+            setCurrentStep('plan-type');
+          }}
+          userOrgId={userOrgId}
+        />
+
+        {/* Status Modal */}
+        <PlanStatusModal
+          isOpen={showStatusModal}
+          onClose={() => setShowStatusModal(false)}
+          onViewPlans={() => {
+            setShowStatusModal(false);
+            // Stay on plans table
+          }}
+          planStatus={planStatusInfo.status}
+          message={planStatusInfo.message}
+        />
+      </div>
+    );
+  }
+
   // Step handlers
   const handlePlanTypeSelect = (type: PlanType) => {
-    console.log('Planning: Plan type selected:', type);
     setSelectedPlanType(type);
     setCurrentStep('objective-selection');
   };
 
   const handleObjectivesSelected = (objectives: StrategicObjective[]) => {
-    console.log('Planning: Objectives selected:', objectives.length);
-    console.log('Planning: Objectives details:', objectives.map(obj => ({
-      id: obj.id,
-      title: obj.title,
-      weight: obj.weight,
-      planner_weight: obj.planner_weight,
-      effective_weight: obj.effective_weight
-    })));
-    
+    console.log('Objectives selected in Planning:', objectives);
     setSelectedObjectives(objectives);
 
     // If only one objective, auto-select it
     if (objectives.length === 1) {
       setSelectedObjective(objectives[0]);
-      console.log('Planning: Auto-selected single objective:', objectives[0].title);
     }
   };
 
   const handleProceedToPlanning = () => {
-    console.log('Planning: Proceeding to planning with objectives:', selectedObjectives.length);
+    console.log('Proceeding to planning with objectives:', selectedObjectives);
     setCurrentStep('planning');
   };
 
   const handleSelectObjective = (objective: StrategicObjective) => {
-    console.log('Planning: Objective selected:', objective.title);
+    console.log('Objective selected:', objective);
     setSelectedObjective(objective);
     setSelectedProgram(null);
     setSelectedInitiative(null);
   };
 
   const handleSelectProgram = (program: Program) => {
-    console.log('Planning: Program selected:', program.name);
+    console.log('Program selected:', program);
     setSelectedProgram(program);
     setSelectedObjective(null);
     setSelectedInitiative(null);
   };
 
   const handleSelectInitiative = (initiative: StrategicInitiative) => {
-    console.log('Planning: Initiative selected:', initiative.name);
+    console.log('Initiative selected:', initiative);
     setSelectedInitiative(initiative);
   };
 
-  // PRODUCTION-SAFE: Enhanced initiative CRUD handlers
+  // PRODUCTION FIX: Optimized initiative CRUD handlers
   const handleEditInitiative = (initiative: StrategicInitiative | {}) => {
-    console.log('Planning: Opening initiative form for:', initiative);
-    
-    // Calculate the correct parent weight for the initiative form
-    let parentWeight = 100;
-    let selectedObjectiveData = null;
-
-    if (selectedObjective) {
-      // Find the objective data from selectedObjectives (which has custom weights)
-      selectedObjectiveData = selectedObjectives.find(obj => obj.id === selectedObjective.id);
-      
-      if (selectedObjectiveData) {
-        parentWeight = selectedObjectiveData.effective_weight !== undefined
-          ? selectedObjectiveData.effective_weight
-          : selectedObjectiveData.planner_weight !== undefined && selectedObjectiveData.planner_weight !== null
-            ? selectedObjectiveData.planner_weight
-            : selectedObjectiveData.weight;
-      } else {
-        parentWeight = selectedObjective.weight;
-      }
-    } else if (selectedProgram) {
-      const parentObjective = selectedObjectives.find(obj =>
-        obj.id === selectedProgram.strategic_objective_id ||
-        obj.id === selectedProgram.strategic_objective?.id
-      );
-
-      if (parentObjective) {
-        parentWeight = parentObjective.effective_weight !== undefined
-          ? parentObjective.effective_weight
-          : parentObjective.planner_weight !== undefined && parentObjective.planner_weight !== null
-            ? parentObjective.planner_weight
-            : parentObjective.weight;
-      }
-    }
-
-    // Set the initiative with weight context
-    const initiativeWithContext = {
+    // Pass the custom weight data when editing/creating initiatives
+    const initiativeWithWeight = {
       ...initiative,
-      parentWeight,
-      selectedObjectiveData
+      parentWeight: selectedObjective ? (
+        selectedObjectives.find(obj => obj.id === selectedObjective.id)?.effective_weight ||
+        selectedObjectives.find(obj => obj.id === selectedObjective.id)?.planner_weight ||
+        selectedObjective.weight
+      ) : selectedProgram?.strategic_objective?.weight || 100,
+      selectedObjectiveData: selectedObjective ?
+        selectedObjectives.find(obj => obj.id === selectedObjective.id) : null
     };
 
-    setEditingInitiative(initiativeWithContext as StrategicInitiative);
+    setEditingInitiative(initiative as StrategicInitiative);
     setShowInitiativeForm(true);
   };
 
   const handleSaveInitiative = async (data: any) => {
-    console.log('Planning: Starting initiative save with data:', data);
-    
     await handleSaveWithOptimisticUpdate(async () => {
+      if (editingInitiative?.id) {
+        await initiatives.update(editingInitiative.id, data);
+      } else {
+        await initiatives.create(data);
+      }
+      setShowInitiativeForm(false);
+      setEditingInitiative(null);
+    }, 'Initiative saved successfully', 'initiative');
+  };
+
+  const handleUpdateInitiative = async (data: any) => {
+    try {
+      setError(null);
+      console.log('Planning: Starting initiative update with data:', data);
+
       let result;
-      
       if (editingInitiative?.id) {
         console.log('Planning: Updating existing initiative:', editingInitiative.id);
-        
-        // CRITICAL: Preserve essential data during updates
+
+        // CRITICAL: Preserve all existing data for updates
         const updateData = {
-          name: data.name,
-          weight: data.weight,
-          strategic_objective: data.strategic_objective,
-          program: data.program,
-          organization: data.organization || editingInitiative.organization,
-          initiative_feed: data.initiative_feed,
-          // Preserve critical fields
-          is_default: editingInitiative.is_default || false
+          ...editingInitiative, // Start with existing data
+          ...data, // Apply new changes
+          id: editingInitiative.id,
+          organization: editingInitiative.organization || data.organization,
+          is_default: editingInitiative.is_default,
+          created_at: editingInitiative.created_at,
+          updated_at: editingInitiative.updated_at
         };
 
-        console.log('Planning: Prepared update data:', updateData);
-        result = await initiatives.update(editingInitiative.id, updateData);
+        console.log('Planning: Update data prepared:', updateData);
+        result = await initiatives.update(editingInitiative.id, data);
+        console.log('Planning: Initiative update result:', result);
       } else {
         console.log('Planning: Creating new initiative');
         result = await initiatives.create(data);
+        console.log('Planning: Initiative create result:', result);
       }
 
-      console.log('Planning: Initiative save result:', result);
-      
-      setShowInitiativeForm(false);
       setEditingInitiative(null);
-      
-      // Trigger initiative refresh
+
+      // Force refresh initiatives with delay to ensure backend is updated
       setTimeout(() => {
+        console.log('Planning: Triggering initiative refresh after update');
         setInitiativeRefreshKey(prev => prev + 1);
         queryClient.invalidateQueries({ queryKey: ['initiatives'] });
+        queryClient.invalidateQueries({ queryKey: ['objectives'] });
       }, 500);
-      
-    }, editingInitiative?.id ? 'Initiative updated successfully' : 'Initiative created successfully', 'initiative');
+
+      console.log('Planning: Initiative update process completed successfully');
+    } catch (error: any) {
+      console.error('Failed to save initiative:', error);
+      console.error('Initiative update error details:', {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status
+      });
+      setError(error.message || 'Failed to save initiative');
+    }
   };
 
   // Performance measure CRUD handlers
   const handleEditMeasure = (measure: PerformanceMeasure | {}) => {
-    console.log('Planning: Opening measure form for:', measure);
     setEditingMeasure(measure as PerformanceMeasure);
     setShowMeasureForm(true);
   };
 
   const handleSaveMeasure = async (data: any) => {
-    console.log('Planning: Saving performance measure:', data);
-    
     await handleSaveWithOptimisticUpdate(async () => {
       if (editingMeasure?.id) {
         await performanceMeasures.update(editingMeasure.id, data);
@@ -793,33 +822,24 @@ const Planning: React.FC = () => {
 
   // Main activity CRUD handlers
   const handleEditActivity = (activity: MainActivity | {}) => {
-    console.log('Planning: Opening activity form for:', activity);
     setEditingActivity(activity as MainActivity);
     setShowActivityForm(true);
   };
 
   const handleSaveActivity = async (data: any) => {
-    console.log('Planning: Saving main activity:', data);
-    
     await handleSaveWithOptimisticUpdate(async () => {
-      let result;
-      
       if (editingActivity?.id) {
-        result = await mainActivities.update(editingActivity.id, data);
+        await mainActivities.update(editingActivity.id, data);
       } else {
-        result = await mainActivities.create(data);
+        await mainActivities.create(data);
       }
-      
       setShowActivityForm(false);
       setEditingActivity(null);
-      
-      return result;
     }, 'Main activity saved successfully', 'activity');
   };
 
-  // Sub-activity and budget handlers
+  // Budget handlers
   const handleAddBudget = (activity: MainActivity, calculationType: BudgetCalculationType, activityType?: ActivityType) => {
-    console.log('Planning: Adding budget for activity:', activity.name, 'Type:', activityType);
     setSelectedActivity(activity);
     setBudgetCalculationType(calculationType);
     setSelectedActivityType(activityType || null);
@@ -832,7 +852,6 @@ const Planning: React.FC = () => {
   };
 
   const handleEditBudget = (activity: MainActivity) => {
-    console.log('Planning: Editing budget for activity:', activity.name);
     setSelectedActivity(activity);
     setEditingBudget(activity.budget || null);
 
@@ -848,63 +867,34 @@ const Planning: React.FC = () => {
   };
 
   const handleViewBudget = (activity: MainActivity) => {
-    console.log('Planning: Viewing budget for activity:', activity.name);
     setSelectedActivity(activity);
     setShowBudgetDetails(true);
   };
 
   const handleCostingToolComplete = (costingData: any) => {
-    console.log('Planning: Costing tool completed with data:', costingData);
+    console.log('Costing tool completed with data:', costingData);
     setCostingToolData(costingData);
     setShowCostingTool(false);
     setShowBudgetForm(true);
   };
 
   const handleSaveBudget = async (budgetData: any) => {
-    console.log('Planning: Saving budget data:', budgetData);
-    
     await handleSaveWithOptimisticUpdate(async () => {
       if (!selectedActivity?.id) {
         throw new Error('No activity selected for budget');
       }
 
-      // Create sub-activity with budget
-      const result = await subActivities.create(budgetData);
-      console.log('Planning: Sub-activity with budget created:', result);
+      console.log('Saving budget for activity:', selectedActivity.id);
+      await mainActivities.updateBudget(selectedActivity.id, budgetData);
 
       setShowBudgetForm(false);
       setSelectedActivity(null);
       setEditingBudget(null);
       setCostingToolData(null);
-      
-      return result;
-    }, 'Sub-activity with budget saved successfully', 'budget');
+    }, 'Budget saved successfully', 'budget');
   };
 
-  // Review data refresh handler
-  const handleReviewPlan = async () => {
-    try {
-      setIsLoadingReviewData(true);
-      setError(null);
-
-      console.log('Planning: Preparing review data...');
-      
-      // Increment refresh key to trigger fresh data fetch in PlanReviewTable
-      setReviewRefreshKey(prev => prev + 1);
-
-      // Small delay to ensure data is fresh
-      await new Promise(resolve => setTimeout(resolve, 100));
-
-      setCurrentStep('review');
-      console.log('Planning: Moved to review step');
-    } catch (error) {
-      console.error('Planning: Error preparing review data:', error);
-      setError('Failed to prepare review data');
-    } finally {
-      setIsLoadingReviewData(false);
-    }
-  };
-
+  // Manual refresh handler for review step
   const handleRefreshReviewData = async () => {
     try {
       setIsLoadingReviewData(true);
@@ -915,18 +905,10 @@ const Planning: React.FC = () => {
     }
   };
 
-  // Handle fresh data received from PlanReviewTable
-  const handleReviewDataRefresh = (freshData: StrategicObjective[]) => {
-    console.log('Planning: Fresh data received from PlanReviewTable:', freshData.length);
-    setSelectedObjectives(freshData);
-  };
-
   const handleSubmitPlan = async () => {
     try {
       setIsSubmitting(true);
       setError(null);
-
-      console.log('Planning: Starting plan submission...');
 
       if (!userOrganization || selectedObjectives.length === 0) {
         throw new Error('Missing required plan data');
@@ -960,7 +942,7 @@ const Planning: React.FC = () => {
           return;
         }
       } catch (checkError) {
-        console.warn('Planning: Failed to check existing plans:', checkError);
+        console.warn('Failed to check existing plans:', checkError);
         // Continue with submission if check fails
       }
 
@@ -983,7 +965,7 @@ const Planning: React.FC = () => {
         planner_name: plannerName,
         type: selectedPlanType,
         strategic_objective: selectedObjectives[0].id, // Primary objective
-        selected_objectives: selectedObjectiveIds,
+        selected_objectives: selectedObjectiveIds, // Send only IDs - CORRECT
         selected_objectives_weights: selectedObjectivesWeights,
         fiscal_year: new Date().getFullYear().toString(),
         from_date: fromDate,
@@ -991,17 +973,19 @@ const Planning: React.FC = () => {
         status: 'SUBMITTED'
       };
 
-      console.log('Planning: Submitting plan:', planData);
+      console.log('Submitting plan:', planData);
+      console.log('Selected objective IDs:', selectedObjectiveIds);
+      console.log('Selected objectives weights:', selectedObjectivesWeights);
 
       // Create the plan
       const createdPlan = await plans.create(planData);
-      console.log('Planning: Plan created successfully:', createdPlan);
+      console.log('Plan created:', createdPlan);
 
       // Show success modal
       setShowSuccessModal(true);
 
     } catch (error: any) {
-      console.error('Planning: Failed to submit plan:', error);
+      console.error('Failed to submit plan:', error);
 
       // Check if it's a duplicate plan error
       if (error.response?.data?.detail?.includes('already been submitted') ||
@@ -1012,7 +996,7 @@ const Planning: React.FC = () => {
         });
         setShowStatusModal(true);
       } else {
-        console.error('Planning: Error response data:', error.response?.data);
+        console.error('Error response data:', error.response?.data);
         let errorMessage = 'Failed to submit plan';
         if (error.response?.data?.detail) {
           errorMessage = error.response.data.detail;
@@ -1027,8 +1011,6 @@ const Planning: React.FC = () => {
   };
 
   const handleCreateNewPlan = () => {
-    console.log('Planning: Creating new plan, resetting all state');
-    
     // Reset all state for new plan
     setShowPlansTable(false);
     setCurrentStep('plan-type');
@@ -1040,20 +1022,15 @@ const Planning: React.FC = () => {
     setSuccess(null);
     setReviewRefreshKey(0);
     setIsLoadingReviewData(false);
-    setRefreshKey(0);
-    setInitiativeRefreshKey(0);
   };
 
   const handleViewMyPlans = () => {
-    console.log('Planning: Returning to plans table');
     setShowPlansTable(true);
     setCurrentStep('plan-type');
   };
 
   // Navigation handlers
   const handleBack = () => {
-    console.log('Planning: Back button clicked from step:', currentStep);
-    
     switch (currentStep) {
       case 'objective-selection':
         setCurrentStep('plan-type');
@@ -1073,8 +1050,6 @@ const Planning: React.FC = () => {
   };
 
   const handleCancel = () => {
-    console.log('Planning: Cancel button clicked, closing all modals');
-    
     setShowInitiativeForm(false);
     setShowMeasureForm(false);
     setShowActivityForm(false);
@@ -1117,44 +1092,7 @@ const Planning: React.FC = () => {
     }
   };
 
-  // Check permissions
-  if (!isUserPlanner && !isAdmin) {
-    return (
-      <div className="flex items-center justify-center min-h-[60vh]">
-        <div className="text-center p-8 bg-yellow-50 rounded-lg border border-yellow-200">
-          <AlertCircle className="h-12 w-12 text-yellow-500 mx-auto mb-4" />
-          <h3 className="text-lg font-medium text-yellow-800 mb-2">Access Restricted</h3>
-          <p className="text-yellow-600">{t('planning.permissions.plannerRequired')}</p>
-        </div>
-      </div>
-    );
-  }
-
-  // Show plans table first
-  if (showPlansTable && currentStep === 'plan-type') {
-    return (
-      <div className="px-4 py-6 sm:px-0">
-        <PlansTable
-          onCreateNewPlan={handleCreateNewPlan}
-          userOrgId={userOrgId}
-        />
-
-        {/* Status Modal */}
-        <PlanStatusModal
-          isOpen={showStatusModal}
-          onClose={() => setShowStatusModal(false)}
-          onViewPlans={() => {
-            setShowStatusModal(false);
-            // Stay on plans table
-          }}
-          planStatus={planStatusInfo.status}
-          message={planStatusInfo.message}
-        />
-      </div>
-    );
-  }
-
-  // Main planning interface
+  // Main render
   return (
     <div className="px-4 py-6 sm:px-0">
       {/* Error and Success Messages */}
@@ -1172,7 +1110,7 @@ const Planning: React.FC = () => {
         </div>
       )}
 
-      {/* Loading indicator for review data preparation */}
+      {/* PRODUCTION FIX: Loading indicator for review data preparation */}
       {isLoadingReviewData && (
         <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg flex items-center">
           <Loader className="h-5 w-5 animate-spin mr-2 text-blue-600" />
@@ -1197,8 +1135,6 @@ const Planning: React.FC = () => {
                       ? 'border-green-600 bg-green-600 text-white'
                       : ['plan-type', 'objective-selection'].includes(step.key) &&
                         ['objective-selection', 'planning', 'review'].includes(currentStep)
-                        ? 'border-green-600 bg-green-600 text-white'
-                        : step.key === 'planning' && currentStep === 'review'
                         ? 'border-green-600 bg-green-600 text-white'
                         : 'border-gray-300 bg-white text-gray-500'
                   }`}>
@@ -1243,6 +1179,14 @@ const Planning: React.FC = () => {
               <div></div>
             </div>
 
+            {/* Loading indicator for review data preparation */}
+            {isLoadingReviewData && (
+              <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg flex items-center">
+                <Loader className="h-5 w-5 animate-spin mr-2 text-blue-600" />
+                <span className="text-blue-700">Loading latest plan data for review...</span>
+              </div>
+            )}
+
             <HorizontalObjectiveSelector
               onObjectivesSelected={handleObjectivesSelected}
               onProceed={handleProceedToPlanning}
@@ -1279,7 +1223,7 @@ const Planning: React.FC = () => {
               <div className="flex space-x-3">
                 <button
                   onClick={handleReviewPlan}
-                  disabled={isLoadingReviewData || selectedObjectives.length === 0}
+                  disabled={isLoadingReviewData}
                   className="flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-green-600 hover:bg-green-700 disabled:opacity-50"
                 >
                   {isLoadingReviewData ? (
@@ -1294,18 +1238,20 @@ const Planning: React.FC = () => {
                     </>
                   )}
                 </button>
-                <button
-                  onClick={handleRefreshReviewData}
-                  disabled={isLoadingReviewData}
-                  className="flex items-center px-3 py-2 border border-blue-300 rounded-md text-sm text-blue-600 hover:text-blue-800 disabled:opacity-50"
-                >
-                  {isLoadingReviewData ? (
-                    <Loader className="h-4 w-4 mr-2 animate-spin" />
-                  ) : (
-                    <RefreshCw className="h-4 w-4 mr-2" />
-                  )}
-                  Refresh Data
-                </button>
+                {currentStep === 'planning' && (
+                  <button
+                    onClick={handleRefreshReviewData}
+                    disabled={isLoadingReviewData}
+                    className="flex items-center px-3 py-2 border border-blue-300 rounded-md text-sm text-blue-600 hover:text-blue-800 disabled:opacity-50"
+                  >
+                    {isLoadingReviewData ? (
+                      <Loader className="h-4 w-4 mr-2 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-4 w-4 mr-2" />
+                    )}
+                    Refresh Data
+                  </button>
+                )}
               </div>
             </div>
 
@@ -1315,28 +1261,14 @@ const Planning: React.FC = () => {
               <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
                 <h3 className="text-lg font-medium text-gray-900 mb-4 flex items-center">
                   <Target className="h-5 w-5 mr-2 text-blue-600" />
-                  Selected Objectives ({selectedObjectives.length})
+                  Selected Objectives
                 </h3>
-                
-                {selectedObjectives.length === 0 ? (
-                  <div className="text-center p-6 bg-gray-50 rounded-lg border-2 border-dashed border-gray-200">
-                    <Target className="h-8 w-8 text-gray-400 mx-auto mb-2" />
-                    <p className="text-gray-500 text-sm">No objectives selected</p>
-                    <button
-                      onClick={() => setCurrentStep('objective-selection')}
-                      className="mt-3 text-blue-600 hover:text-blue-800 text-sm"
-                    >
-                      Select Objectives
-                    </button>
-                  </div>
-                ) : (
-                  <StrategicObjectivesList
-                    onSelectObjective={handleSelectObjective}
-                    selectedObjectiveId={selectedObjective?.id}
-                    onSelectProgram={handleSelectProgram}
-                    selectedObjectives={selectedObjectives}
-                  />
-                )}
+                <StrategicObjectivesList
+                  onSelectObjective={handleSelectObjective}
+                  selectedObjectiveId={selectedObjective?.id}
+                  onSelectProgram={handleSelectProgram}
+                  selectedObjectives={selectedObjectives}
+                />
               </div>
 
               {/* Column 2: Initiatives */}
@@ -1345,27 +1277,49 @@ const Planning: React.FC = () => {
                   <BarChart3 className="h-5 w-5 mr-2 text-green-600" />
                   Strategic Initiatives
                 </h3>
-                
                 {(selectedObjective || selectedProgram) ? (
                   (() => {
                     // Calculate the effective weight to pass to InitiativeList
-                    let effectiveWeight = 100;
+                    let effectiveWeight = 100; // Default fallback
                     let selectedObjectiveData = null;
 
                     if (selectedObjective) {
-                      // Find the selected objective in the selectedObjectives array
+                      // Find the selected objective in the selectedObjectives array to get the custom weight
                       selectedObjectiveData = selectedObjectives.find(obj => obj.id === selectedObjective.id);
 
+                      console.log('Planning.tsx: Found selectedObjectiveData:', selectedObjectiveData);
+
                       if (selectedObjectiveData) {
+                        // Use the weight from selectedObjectives array (which has custom weights)
                         effectiveWeight = selectedObjectiveData.effective_weight !== undefined
                           ? selectedObjectiveData.effective_weight
                           : selectedObjectiveData.planner_weight !== undefined && selectedObjectiveData.planner_weight !== null
                             ? selectedObjectiveData.planner_weight
                             : selectedObjectiveData.weight;
+
+                        console.log('Planning.tsx: Using custom weight from selectedObjectives:', effectiveWeight);
                       } else {
-                        effectiveWeight = selectedObjective.weight;
+                        // Fallback to the selected objective's weight
+                        effectiveWeight = selectedObjective.effective_weight !== undefined
+                          ? selectedObjective.effective_weight
+                          : selectedObjective.planner_weight !== undefined && selectedObjective.planner_weight !== null
+                            ? selectedObjective.planner_weight
+                            : selectedObjective.weight;
+
+                        console.log('Planning.tsx: Using fallback weight from selectedObjective:', effectiveWeight);
                       }
+
+                      console.log('Planning.tsx - Weight calculation for InitiativeList:', {
+                        objectiveId: selectedObjective.id,
+                        objectiveTitle: selectedObjective.title,
+                        selectedObjectiveData: selectedObjectiveData ? 'found' : 'not found',
+                        originalWeight: selectedObjective.weight,
+                        plannerWeight: selectedObjective.planner_weight,
+                        effectiveWeightFromSelected: selectedObjectiveData?.effective_weight,
+                        finalEffectiveWeight: effectiveWeight
+                      });
                     } else if (selectedProgram) {
+                      // For programs, also check if the parent objective is in selectedObjectives
                       const parentObjective = selectedObjectives.find(obj =>
                         obj.id === selectedProgram.strategic_objective_id ||
                         obj.id === selectedProgram.strategic_objective?.id
@@ -1377,6 +1331,10 @@ const Planning: React.FC = () => {
                           : parentObjective.planner_weight !== undefined && parentObjective.planner_weight !== null
                             ? parentObjective.planner_weight
                             : parentObjective.weight;
+                      } else {
+                        effectiveWeight = selectedProgram.strategic_objective?.effective_weight ||
+                                        selectedProgram.strategic_objective?.planner_weight ||
+                                        selectedProgram.strategic_objective?.weight || 100;
                       }
                     }
 
@@ -1391,7 +1349,7 @@ const Planning: React.FC = () => {
                         planKey={`planning-${refreshKey}`}
                         isUserPlanner={isUserPlanner}
                         userOrgId={userOrgId}
-                        refreshKey={initiativeRefreshKey}
+                        refreshKey={refreshKey}
                       />
                     );
                   })()
@@ -1434,16 +1392,29 @@ const Planning: React.FC = () => {
                     Main Activities
                   </h3>
                   {selectedInitiative ? (
-                    <MainActivityList
-                      initiativeId={selectedInitiative.id}
-                      initiativeWeight={Number(selectedInitiative.weight)}
-                      onEditActivity={handleEditActivity}
-                      onSelectActivity={setSelectedActivity}
-                      planKey={`planning-${refreshKey}`}
-                      isUserPlanner={isUserPlanner}
-                      userOrgId={userOrgId}
-                      refreshKey={refreshKey}
-                    />
+                    <div className="space-y-4">
+                      <MainActivityList
+                        initiativeId={selectedInitiative.id}
+                        initiativeWeight={Number(selectedInitiative.weight)}
+                        onEditActivity={handleEditActivity}
+                        onSelectActivity={() => {}}
+                        planKey={`planning-${refreshKey}`}
+                        refreshKey={refreshKey}
+                      />
+
+                      {/* Create Main Activity Button */}
+                      {isUserPlanner && (
+                        <div className="text-center pt-4">
+                          <button
+                            onClick={() => handleEditActivity({})}
+                            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-orange-600 hover:bg-orange-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-orange-500"
+                          >
+                            <Plus className="h-4 w-4 mr-2" />
+                            Create Main Activity
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   ) : (
                     <div className="text-center p-6 bg-gray-50 rounded-lg border-2 border-dashed border-gray-200">
                       <DollarSign className="h-6 w-6 text-gray-400 mx-auto mb-2" />
@@ -1505,7 +1476,7 @@ const Planning: React.FC = () => {
         )}
       </div>
 
-      {/* MODALS AND FORMS */}
+      {/* Modals and Forms */}
 
       {/* Initiative Form Modal */}
       {showInitiativeForm && (selectedObjective || selectedProgram) && (
@@ -1516,11 +1487,12 @@ const Planning: React.FC = () => {
             </h3>
 
             {(() => {
-              // Calculate the correct parent weight for the form
+              // Calculate the effective weight for the form
               let formParentWeight = 100;
               let selectedObjectiveData = null;
 
               if (selectedObjective) {
+                // Find the selected objective in the selectedObjectives array
                 selectedObjectiveData = selectedObjectives.find(obj => obj.id === selectedObjective.id);
 
                 if (selectedObjectiveData) {
@@ -1530,7 +1502,11 @@ const Planning: React.FC = () => {
                       ? selectedObjectiveData.planner_weight
                       : selectedObjectiveData.weight;
                 } else {
-                  formParentWeight = selectedObjective.weight;
+                  formParentWeight = selectedObjective.effective_weight !== undefined
+                    ? selectedObjective.effective_weight
+                    : selectedObjective.planner_weight !== undefined && selectedObjective.planner_weight !== null
+                      ? selectedObjective.planner_weight
+                      : selectedObjective.weight;
                 }
               } else if (selectedProgram) {
                 const parentObjective = selectedObjectives.find(obj =>
@@ -1544,8 +1520,18 @@ const Planning: React.FC = () => {
                     : parentObjective.planner_weight !== undefined && parentObjective.planner_weight !== null
                       ? parentObjective.planner_weight
                       : parentObjective.weight;
+                } else {
+                  formParentWeight = selectedProgram.strategic_objective?.weight || 100;
                 }
               }
+
+              console.log('InitiativeForm Modal - Weight calculation:', {
+                selectedObjective: selectedObjective?.title,
+                selectedProgram: selectedProgram?.name,
+                selectedObjectiveData: selectedObjectiveData ? 'found' : 'not found',
+                formParentWeight,
+                originalWeight: selectedObjective?.weight || selectedProgram?.strategic_objective?.weight
+              });
 
               return (
                 <InitiativeForm
@@ -1635,7 +1621,6 @@ const Planning: React.FC = () => {
               onSubmit={handleSaveBudget}
               onCancel={handleCancel}
               initialData={editingBudget || costingToolData}
-              costingToolData={costingToolData}
               isSubmitting={isSubmitting}
             />
           </div>
