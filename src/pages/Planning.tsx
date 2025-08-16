@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -73,6 +73,7 @@ import MainActivityForm from '../components/MainActivityForm';
 import ActivityBudgetForm from '../components/ActivityBudgetForm';
 import ActivityBudgetDetails from '../components/ActivityBudgetDetails';
 import PlanReviewTable from '../components/PlanReviewTable';
+import PlanPreviewModal from '../components/PlanPreviewModal';
 import PlanningHeader from '../components/PlanningHeader';
 
 // Costing tool imports
@@ -216,6 +217,7 @@ const Planning: React.FC = () => {
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [showPlansTable, setShowPlansTable] = useState(true);
+  const [showPreviewModal, setShowPreviewModal] = useState(false);
 
   // Edit state
   const [editingInitiative, setEditingInitiative] = useState<StrategicInitiative | null>(null);
