@@ -188,7 +188,7 @@ const Planning: React.FC = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
-  // ALL HOOKS AT TOP LEVEL
+  // All state hooks at top level
   const [currentStep, setCurrentStep] = useState<PlanningStep>('plan-type');
   const [selectedPlanType, setSelectedPlanType] = useState<PlanType>('LEO/EO Plan');
   const [selectedObjectives, setSelectedObjectives] = useState<StrategicObjective[]>([]);
@@ -238,178 +238,6 @@ const Planning: React.FC = () => {
     status: 'SUBMITTED' | 'APPROVED' | 'REJECTED' | null;
     message: string;
   }>({ status: null, message: '' });
-
-  // Plans table component
-  const PlansTable: React.FC<{ onCreateNewPlan: () => void; userOrgId: number | null }> = ({ 
-    onCreateNewPlan, 
-    userOrgId 
-  }) => {
-    const [organizationsMap, setOrganizationsMap] = useState<Record<string, string>>({});
-
-    useEffect(() => {
-      const fetchOrganizations = async () => {
-        try {
-          const response = await organizations.getAll();
-          const orgMap: Record<string, string> = {};
-          const orgsData = response?.data || response || [];
-          
-          if (Array.isArray(orgsData)) {
-            orgsData.forEach((org: any) => {
-              if (org && org.id) {
-                orgMap[org.id] = org.name;
-              }
-            });
-          }
-          setOrganizationsMap(orgMap);
-        } catch (error) {
-          console.error('Failed to fetch organizations:', error);
-        }
-      };
-      fetchOrganizations();
-    }, []);
-
-    const { data: userPlans, isLoading } = useQuery({
-      queryKey: ['user-plans', userOrgId],
-      queryFn: async () => {
-        if (!userOrgId) return { data: [] };
-        try {
-          const response = await api.get('/plans/', {
-            params: { organization: userOrgId }
-          });
-          const plansData = response.data?.results || response.data || [];
-          return { data: plansData };
-        } catch (error) {
-          console.error('Error fetching user plans:', error);
-          return { data: [] };
-        }
-      },
-      enabled: !!userOrgId
-    });
-
-    const formatDate = (dateString: string) => {
-      if (!dateString) return 'N/A';
-      try {
-        return format(new Date(dateString), 'MMM d, yyyy');
-      } catch (e) {
-        return 'Invalid date';
-      }
-    };
-
-    const getStatusColor = (status: string) => {
-      switch (status) {
-        case 'APPROVED':
-          return 'bg-green-100 text-green-800';
-        case 'SUBMITTED':
-          return 'bg-yellow-100 text-yellow-800';
-        case 'REJECTED':
-          return 'bg-red-100 text-red-800';
-        default:
-          return 'bg-gray-100 text-gray-800';
-      }
-    };
-
-    const handleViewPlan = (plan: any) => {
-      navigate(`/plans/${plan.id}`);
-    };
-
-    if (isLoading) {
-      return (
-        <div className="flex items-center justify-center p-8">
-          <Loader className="h-6 w-6 animate-spin mr-2" />
-          <span>Loading your plans...</span>
-        </div>
-      );
-    }
-
-    const plans = userPlans?.data || [];
-
-    return (
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200">
-        <div className="p-6">
-          <div className="flex justify-between items-center mb-6">
-            <h2 className="text-xl font-semibold text-gray-900">Your Plans</h2>
-            <button
-              onClick={onCreateNewPlan}
-              className="flex items-center px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              Create New Plan
-            </button>
-          </div>
-
-          {plans.length === 0 ? (
-            <div className="text-center py-12 bg-gray-50 rounded-lg border-2 border-dashed border-gray-200">
-              <FileSpreadsheet className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-              <h3 className="text-lg font-medium text-gray-900 mb-2">No Plans Created</h3>
-              <p className="text-gray-500 mb-4">You haven't created any plans yet.</p>
-              <button
-                onClick={onCreateNewPlan}
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700"
-              >
-                <Plus className="h-4 w-4 mr-2" />
-                Create Your First Plan
-              </button>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Plan Type
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Planning Period
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Status
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Submitted Date
-                    </th>
-                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Actions
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {plans.map((plan: any) => (
-                    <tr key={plan.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {plan.type}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {plan.from_date && plan.to_date ?
-                          `${formatDate(plan.from_date)} - ${formatDate(plan.to_date)}` :
-                          'N/A'}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${getStatusColor(plan.status)}`}>
-                          {plan.status}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {formatDate(plan.submitted_at)}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                        <button
-                          onClick={() => handleViewPlan(plan)}
-                          className="text-blue-600 hover:text-blue-900 flex items-center"
-                        >
-                          <Eye className="h-4 w-4 mr-1" />
-                          View
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  };
 
   // Initialize authentication and user data
   useEffect(() => {
@@ -512,6 +340,14 @@ const Planning: React.FC = () => {
 
   const handleObjectivesSelected = (objectives: StrategicObjective[]) => {
     console.log('Planning: Objectives selected:', objectives.length);
+    console.log('Planning: Objectives data:', objectives.map(obj => ({
+      id: obj.id,
+      title: obj.title,
+      weight: obj.weight,
+      planner_weight: obj.planner_weight,
+      effective_weight: obj.effective_weight
+    })));
+    
     setSelectedObjectives(objectives);
     
     if (objectives.length === 1) {
@@ -793,6 +629,178 @@ const Planning: React.FC = () => {
     }
   };
 
+  // Plans Table Component
+  const PlansTable: React.FC<{ onCreateNewPlan: () => void; userOrgId: number | null }> = ({ 
+    onCreateNewPlan, 
+    userOrgId 
+  }) => {
+    const [organizationsMap, setOrganizationsMap] = useState<Record<string, string>>({});
+
+    useEffect(() => {
+      const fetchOrganizations = async () => {
+        try {
+          const response = await organizations.getAll();
+          const orgMap: Record<string, string> = {};
+          const orgsData = response?.data || response || [];
+          
+          if (Array.isArray(orgsData)) {
+            orgsData.forEach((org: any) => {
+              if (org && org.id) {
+                orgMap[org.id] = org.name;
+              }
+            });
+          }
+          setOrganizationsMap(orgMap);
+        } catch (error) {
+          console.error('Failed to fetch organizations:', error);
+        }
+      };
+      fetchOrganizations();
+    }, []);
+
+    const { data: userPlans, isLoading } = useQuery({
+      queryKey: ['user-plans', userOrgId],
+      queryFn: async () => {
+        if (!userOrgId) return { data: [] };
+        try {
+          const response = await api.get('/plans/', {
+            params: { organization: userOrgId }
+          });
+          const plansData = response.data?.results || response.data || [];
+          return { data: plansData };
+        } catch (error) {
+          console.error('Error fetching user plans:', error);
+          return { data: [] };
+        }
+      },
+      enabled: !!userOrgId
+    });
+
+    const formatDate = (dateString: string) => {
+      if (!dateString) return 'N/A';
+      try {
+        return format(new Date(dateString), 'MMM d, yyyy');
+      } catch (e) {
+        return 'Invalid date';
+      }
+    };
+
+    const getStatusColor = (status: string) => {
+      switch (status) {
+        case 'APPROVED':
+          return 'bg-green-100 text-green-800';
+        case 'SUBMITTED':
+          return 'bg-yellow-100 text-yellow-800';
+        case 'REJECTED':
+          return 'bg-red-100 text-red-800';
+        default:
+          return 'bg-gray-100 text-gray-800';
+      }
+    };
+
+    const handleViewPlan = (plan: any) => {
+      navigate(`/plans/${plan.id}`);
+    };
+
+    if (isLoading) {
+      return (
+        <div className="flex items-center justify-center p-8">
+          <Loader className="h-6 w-6 animate-spin mr-2" />
+          <span>Loading your plans...</span>
+        </div>
+      );
+    }
+
+    const plans = userPlans?.data || [];
+
+    return (
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+        <div className="p-6">
+          <div className="flex justify-between items-center mb-6">
+            <h2 className="text-xl font-semibold text-gray-900">Your Plans</h2>
+            <button
+              onClick={onCreateNewPlan}
+              className="flex items-center px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              Create New Plan
+            </button>
+          </div>
+
+          {plans.length === 0 ? (
+            <div className="text-center py-12 bg-gray-50 rounded-lg border-2 border-dashed border-gray-200">
+              <FileSpreadsheet className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+              <h3 className="text-lg font-medium text-gray-900 mb-2">No Plans Created</h3>
+              <p className="text-gray-500 mb-4">You haven't created any plans yet.</p>
+              <button
+                onClick={onCreateNewPlan}
+                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700"
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                Create Your First Plan
+              </button>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Plan Type
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Planning Period
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Status
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Submitted Date
+                    </th>
+                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Actions
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {plans.map((plan: any) => (
+                    <tr key={plan.id} className="hover:bg-gray-50">
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {plan.type}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {plan.from_date && plan.to_date ?
+                          `${formatDate(plan.from_date)} - ${formatDate(plan.to_date)}` :
+                          'N/A'}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${getStatusColor(plan.status)}`}>
+                          {plan.status}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {formatDate(plan.submitted_at)}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                        <button
+                          onClick={() => handleViewPlan(plan)}
+                          className="text-blue-600 hover:text-blue-900 flex items-center"
+                        >
+                          <Eye className="h-4 w-4 mr-1" />
+                          View
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   // Check permissions
   if (!isUserPlanner && !isAdmin) {
     return (
@@ -981,6 +989,7 @@ const Planning: React.FC = () => {
                     }
                     onEditInitiative={handleEditInitiative}
                     onSelectInitiative={handleSelectInitiative}
+                    isNewPlan={true}
                     planKey={`planning-${refreshKey}`}
                     isUserPlanner={isUserPlanner}
                     userOrgId={userOrgId}
@@ -1007,6 +1016,7 @@ const Planning: React.FC = () => {
                       initiativeWeight={Number(selectedInitiative.weight)}
                       onEditMeasure={handleEditMeasure}
                       onSelectMeasure={() => {}}
+                      isNewPlan={true}
                       planKey={`planning-${refreshKey}`}
                     />
                   ) : (
@@ -1029,8 +1039,8 @@ const Planning: React.FC = () => {
                       onEditActivity={handleEditActivity}
                       onSelectActivity={(activity) => {
                         setSelectedActivity(activity);
-                        // You can add budget management here
                       }}
+                      isNewPlan={true}
                       planKey={`planning-${refreshKey}`}
                       isUserPlanner={isUserPlanner}
                       userOrgId={userOrgId}
@@ -1072,6 +1082,7 @@ const Planning: React.FC = () => {
               fromDate={fromDate}
               toDate={toDate}
               planType={selectedPlanType}
+              isPreviewMode={false}
               userOrgId={userOrgId}
               refreshKey={refreshKey}
             />
